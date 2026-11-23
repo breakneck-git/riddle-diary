@@ -1,0 +1,31 @@
+{
+  "candidates": [
+    {
+      "content": {
+        "parts": [
+          {
+            "text": "Париж",
+            "thoughtSignature": "EmAKXgFpFH0TOVay1+ZANXzm+0wu/nvQmWpZbhzdhNSFM20smdt+PjaK6BCTCsZsm7TBUK6pOtLT/df/Y44goVE38/shdFVyWZUSEiJqk+9ZU8tOILPac/AwDn1POsl49dk="
+          }
+        ],
+        "role": "model"
+      },
+      "finishReason": "STOP",
+      "index": 0
+    }
+  ],
+  "usageMetadata": {
+    "promptTokenCount": 18,
+    "candidatesTokenCount": 3,
+    "totalTokenCount": 21,
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 18
+      }
+    ],
+    "serviceTier": "standard"
+  },
+  "modelVersion": "gemini-3.5-flash-lite",
+  "responseId": "TlzgatfvJ-bmxN8P7POg8AU"
+}

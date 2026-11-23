@@ -1,0 +1,35 @@
+{
+  "candidates": [
+    {
+      "content": {
+        "parts": [
+          {
+            "text": "Я знаю, что твоё будущее прекрасно, ведь ты пишешь его сам!",
+            "thoughtSignature": "EmAKXgFpFH0TEXk88RrZQk8fldSKa5oBiFnJZ604b+0tJzrsg6FbJqB8V85TsS3eqFkqzxktV9M0gtGTDy3JtXD+VY/1sBiTFoQqr76OuJfFXSwVBoat3HdvEizLNpwSrbw="
+          }
+        ],
+        "role": "model"
+      },
+      "finishReason": "STOP",
+      "index": 0
+    }
+  ],
+  "usageMetadata": {
+    "promptTokenCount": 1090,
+    "candidatesTokenCount": 16,
+    "totalTokenCount": 1106,
+    "promptTokensDetails": [
+      {
+        "modality": "IMAGE",
+        "tokenCount": 1064
+      },
+      {
+        "modality": "TEXT",
+        "tokenCount": 26
+      }
+    ],
+    "serviceTier": "standard"
+  },
+  "modelVersion": "gemini-3.5-flash-lite",
+  "responseId": "aFzgatfLF4aIxN8Pzqe3gQc"
+}

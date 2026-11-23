@@ -1,0 +1,193 @@
+-- Сон и реплика дневника (Notion 40813e60-bc8d-8129): без печати последняя реплика переживает сон
+-- и после пробуждения стоит на экране целиком, пока кто-то не коснётся пальцем; приглашение —
+-- только на чистой странице. С печатью, фраза-раздумье, ответ на таймере — сон стирает страницу.
+-- Виджет на заглушках KOReader, как в answer_cycle_spec: часы и планировщик — свои.
+local t = require("t")
+
+local clock, timeline, LOG = 0, {}, {}
+
+local function stub(name, mod) package.preload[name] = function() return mod end end
+
+local nop = function() end
+local FREED = 0
+local bb_stub = { fill = nop, free = function() FREED = FREED + 1 end }
+stub("ffi/blitbuffer", { COLOR_WHITE = 0xFF, COLOR_BLACK = 0, TYPE_BB8 = 1, new = function() return bb_stub end })
+stub("device", { isKindle = function() return false end, screen = {} })
+stub("ffi/freetype", {})
+stub("ui/geometry", { new = function(_, o) return o end })
+stub("ui/rendertext", {
+  getGlyph = function() return { ax = 10, l = 0, t = 0, bb = { getWidth = function() return 0 end, getHeight = function() return 0 end } } end,
+})
+stub("ui/uimanager", {
+  scheduleIn = function(_, s, fn) timeline[#timeline + 1] = { at = clock + s, fn = fn } end,
+  unschedule = function(_, fn)
+    for i = #timeline, 1, -1 do if timeline[i].fn == fn then table.remove(timeline, i) end end
+  end,
+  nextTick = function(self, fn) self:scheduleIn(0, fn) end,
+  setDirty = nop,
+})
+stub("ui/widget/widget", { extend = function(_, o) return o end })
+stub("logger", {
+  info = function(...)
+    local parts = {}
+    for i = 1, select("#", ...) do parts[#parts + 1] = tostring((select(i, ...))) end
+    LOG[#LOG + 1] = table.concat(parts, " ")
+  end,
+  warn = nop, err = nop, dbg = nop,
+})
+stub("ui/time", { monotonic = function() return clock end, to_ms = function(x) return x * 1000 end,
+                  to_us = function(x) return x * 1e6 end })
+stub("libs/libkoreader-lfs", { attributes = nop, dir = nop })
+
+local Diary = require("riddle_diarywidget")
+
+-- крутит время до clock + s, выполняя задачи по порядку
+local function run(s)
+  local stop = clock + s
+  while true do
+    local k
+    for i, task in ipairs(timeline) do
+      if task.at <= stop and (not k or task.at < timeline[k].at) then k = i end
+    end
+    if not k then break end
+    local task = table.remove(timeline, k)
+    clock = task.at
+    task.fn()
+  end
+  clock = stop
+end
+
+local function count(needle)
+  local n = 0
+  for _, line in ipairs(LOG) do if line:find(needle, 1, true) then n = n + 1 end end
+  return n
+end
+
+local function diary(sealed)
+  clock, timeline, LOG, FREED = 0, {}, {}, 0
+  local ctl
+  if sealed ~= nil then ctl = { sealed = sealed, on_sleep = function(self) self.slept = true end } end
+  local d = setmetatable({
+    canvas = bb_stub, tasks = {}, queue = {}, inflight = 0, strokes = {}, epoch = 0, w = 758, h = 1024,
+    prompt = { rect = { x = 0, y = 0, w = 0, h = 0 } },
+    face_answer = { ftsize = { getHeightAndAscender = function() return 52, 40 end } },
+    stats = { frames = 0, frame_us = 0, frame_us_max = 0, sink_ticks = 0, sink_us = 0, sink_us_max = 0,
+              ans_steps = 0, ans_us_max = 0, grey_px = 0, lost_ink = 0 },
+    controller = ctl, asks = {}, painted = {},
+  }, { __index = Diary })
+  d.renderRegion = nop
+  d.paintRegion = function(self, x, y, w, h) self.painted[#self.painted + 1] = { x, y, w, h } end
+  d.showInvitation = function() LOG[#LOG + 1] = "SHOWN invitation" end
+  d.penNear = function() return false end
+  d.countLostInk = function() return 0 end
+  return d, ctl
+end
+
+-- ответ пришёл от контроллера (как в onPageDone)
+local function arrive(d, text, kind)
+  d.queue[#d.queue + 1] = { text = text, top = 100, page = { strokes = {} }, kind = kind, t0 = clock }
+  d:nextAnswer()
+end
+
+-- сон и пробуждение подряд, как отдаёт KOReader; контроллер — заглушка с печатью или без
+local function sleep_and_wake(d)
+  d:onSuspend()
+  d:onResume()
+  run(1)
+end
+
+local T = {}
+
+function T.test_unsealed_sleep_keeps_the_held_reply_without_invitation()
+  local d, ctl = diary(false)
+  arrive(d, "Я помню")
+  run(60)
+  t.eq(d.answer.phase, "hold")
+  sleep_and_wake(d)
+  t.ok(d.answer and d.answer.phase == "hold", "реплика стоит после пробуждения")
+  t.eq(FREED, 0, "её слой не освобождён")
+  t.eq(count("SHOWN invitation"), 0, "приглашения поверх нет")
+  t.eq(#d.painted, 1, "реплика попала в холст до общей перерисовки")
+  t.eq(d.painted[1][1], d.answer.block.rect.x)
+  run(3600)
+  t.ok(d.answer, "и стоит дальше, пока не коснутся")
+  t.eq(count("answer gone"), 0)
+  t.ok(ctl.slept, "контроллер о сне знает")
+end
+
+function T.test_touch_after_wake_dissolves_the_kept_reply()
+  local d = diary(false)
+  arrive(d, "Я помню")
+  run(60)
+  sleep_and_wake(d)
+  d:hurryAnswer()
+  run(30)
+  t.eq(d.answer, nil)
+  t.eq(count("answer gone"), 1, "уходит от касания, как днём")
+end
+
+function T.test_sleep_during_reveal_shows_the_reply_whole_after_wake()
+  local d = diary(false)
+  arrive(d, "Я помню тебя")
+  run(0.2)
+  t.eq(d.answer.phase, "reveal", "сон застал проявление")
+  sleep_and_wake(d)
+  t.eq(d.answer.phase, "hold")
+  t.eq(d.answer.i, #d.answer.block.glyphs, "все буквы в слое")
+  run(3600)
+  t.ok(d.answer, "и стоит без таймера")
+end
+
+function T.test_sleep_drops_unfinished_page_and_requests_but_not_the_reply()
+  local d = diary(false)
+  arrive(d, "Я помню")
+  run(60)
+  d.strokes = { { lvl = 0 } }
+  d.page = { strokes = {} }
+  d.asks = { nop }
+  sleep_and_wake(d)
+  t.eq(#d.strokes, 0, "недописанные штрихи сброшены")
+  t.eq(d.page, nil)
+  t.eq(#d.asks, 0, "очередь запросов пуста")
+  t.ok(d.answer, "реплика осталась")
+end
+
+function T.test_sealed_sleep_wipes_the_reply_and_shows_invitation()
+  local d, ctl = diary(true)
+  arrive(d, "Я помню")
+  run(60)
+  sleep_and_wake(d)
+  t.eq(d.answer, nil, "с печатью страница чистая")
+  t.eq(count("SHOWN invitation"), 1, "и приглашение")
+  t.ok(ctl.slept)
+end
+
+function T.test_no_controller_counts_as_no_seal()
+  local d = diary(nil)
+  arrive(d, "Я помню")
+  run(60)
+  sleep_and_wake(d)
+  t.ok(d.answer, "печати нет — реплика остаётся")
+end
+
+function T.test_sleep_wipes_the_thinking_phrase()
+  local d = diary(false)
+  d.inflight = 1
+  arrive(d, "Думаю", "think")
+  run(60)
+  sleep_and_wake(d)
+  t.eq(d.answer, nil, "фраза-раздумье — не реплика")
+  t.eq(count("SHOWN invitation"), 1)
+end
+
+function T.test_sleep_wipes_a_reply_that_goes_by_timer()
+  local d = diary(false)
+  arrive(d, "первый")
+  d.queue[#d.queue + 1] = { text = "второй", top = 100, page = { strokes = {} } }
+  run(0.1)
+  d:onSuspend()
+  t.eq(d.answer, nil, "за ответом ждали следующих — сон их уронил, ответ уходит с ними")
+  t.eq(#d.queue, 0, "очередь сброшена")
+end
+
+t.run(T)

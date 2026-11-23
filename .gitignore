@@ -1,0 +1,23 @@
+.env
+*.env
+.DS_Store
+tools/bench_out/
+__pycache__/
+config.lua
+!plugin/riddlediary.koplugin/riddle/config.lua
+assets/img/*_original.*
+# local agent instructions
+CLAUDE.md
+.claude/
+# device data, logs, keys
+*.db
+*.sqlite3
+*.log
+*.jsonl
+*.pem
+*.key
+# local scratch dirs (root only: tools/samples/ is tracked)
+/spike/
+/roses/
+/samples/
+tools/kindle_inventory.sh

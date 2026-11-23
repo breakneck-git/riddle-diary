@@ -1,0 +1,27 @@
+{
+"version": 0.6,
+"generator": "synthetic fixture (riddle-diary tests): no real place, center lat 10.0 lon 20.0",
+"osm3s": { "copyright": "synthetic" },
+"elements": [
+{ "type": "way", "id": 101, "geometry": [ { "lat": 10.0, "lon": 19.996 }, { "lat": 10.0, "lon": 20.0 }, { "lat": 10.0, "lon": 20.004 } ], "tags": { "highway": "residential", "name": "Synthetic Lane" } },
+{ "type": "way", "id": 102, "geometry": [ { "lat": 9.995, "lon": 20.0 }, { "lat": 10.005, "lon": 20.0 } ], "tags": { "highway": "primary" } },
+{ "type": "way", "id": 103, "geometry": [ { "lat": 10.02, "lon": 19.999 }, { "lat": 10.02, "lon": 20.001 } ], "tags": { "highway": "residential" } },
+{ "type": "way", "id": 104, "geometry": [ { "lat": 10.003, "lon": 19.99 }, { "lat": 10.003, "lon": 20.0 } ], "tags": { "highway": "tertiary" } },
+{ "type": "way", "id": 105, "geometry": [ { "lat": 10.001, "lon": 19.999 }, { "lat": 10.001, "lon": 20.001 } ], "tags": { "highway": "footway" } },
+{ "type": "way", "id": 106, "geometry": [ { "lat": 10.001, "lon": 20.001 }, { "lat": 10.001, "lon": 20.0011 }, { "lat": 10.0011, "lon": 20.0011 }, { "lat": 10.0011, "lon": 20.001 }, { "lat": 10.001, "lon": 20.001 } ], "tags": { "building": "house" } },
+{ "type": "way", "id": 107, "geometry": [ { "lat": 10.001, "lon": 20.0015 }, { "lat": 10.001, "lon": 20.0016 }, { "lat": 10.0011, "lon": 20.0016 }, { "lat": 10.0011, "lon": 20.0015 }, { "lat": 10.001, "lon": 20.0015 } ], "tags": { "building": "residential" } },
+{ "type": "way", "id": 108, "geometry": [ { "lat": 10.0015, "lon": 20.001 }, { "lat": 10.0015, "lon": 20.0011 }, { "lat": 10.0016, "lon": 20.0011 }, { "lat": 10.0016, "lon": 20.001 }, { "lat": 10.0015, "lon": 20.001 } ], "tags": { "building": "apartments" } },
+{ "type": "way", "id": 109, "geometry": [ { "lat": 10.0015, "lon": 20.0015 }, { "lat": 10.0015, "lon": 20.0016 }, { "lat": 10.0016, "lon": 20.0016 }, { "lat": 10.0016, "lon": 20.0015 }, { "lat": 10.0015, "lon": 20.0015 } ], "tags": { "building": "detached" } },
+{ "type": "way", "id": 110, "geometry": [ { "lat": 9.999, "lon": 19.999 }, { "lat": 9.999, "lon": 19.9991 }, { "lat": 9.9991, "lon": 19.9991 }, { "lat": 9.9991, "lon": 19.999 }, { "lat": 9.999, "lon": 19.999 } ], "tags": { "building": "house" } },
+{ "type": "way", "id": 111, "geometry": [ { "lat": 9.999, "lon": 19.9985 }, { "lat": 9.999, "lon": 19.9986 }, { "lat": 9.9991, "lon": 19.9986 }, { "lat": 9.9991, "lon": 19.9985 }, { "lat": 9.999, "lon": 19.9985 } ], "tags": { "building": "yes" } },
+{ "type": "way", "id": 112, "geometry": [ { "lat": 9.998, "lon": 20.002 }, { "lat": 9.998, "lon": 20.0024 }, { "lat": 9.9984, "lon": 20.0024 }, { "lat": 9.9984, "lon": 20.002 }, { "lat": 9.998, "lon": 20.002 } ], "tags": { "amenity": "school", "name": "Synthetic School" } },
+{ "type": "way", "id": 113, "geometry": [ { "lat": 10.002, "lon": 19.998 }, { "lat": 10.002, "lon": 19.9982 }, { "lat": 10.0022, "lon": 19.9982 }, { "lat": 10.0022, "lon": 19.998 }, { "lat": 10.002, "lon": 19.998 } ], "tags": { "amenity": "place_of_worship", "building": "church" } },
+{ "type": "way", "id": 114, "geometry": [ { "lat": 9.9985, "lon": 20.0005 }, { "lat": 9.9985, "lon": 20.0006 }, { "lat": 9.9986, "lon": 20.0006 }, { "lat": 9.9986, "lon": 20.0005 }, { "lat": 9.9985, "lon": 20.0005 } ], "tags": { "amenity": "pub", "building": "yes" } },
+{ "type": "way", "id": 115, "geometry": [ { "lat": 10.0005, "lon": 19.9975 }, { "lat": 10.0005, "lon": 19.9976 }, { "lat": 10.0006, "lon": 19.9976 }, { "lat": 10.0006, "lon": 19.9975 }, { "lat": 10.0005, "lon": 19.9975 } ], "tags": { "shop": "bakery", "building": "retail" } },
+{ "type": "way", "id": 116, "geometry": [ { "lat": 10.004, "lon": 20.003 }, { "lat": 10.004, "lon": 20.0035 }, { "lat": 10.0045, "lon": 20.0035 }, { "lat": 10.0045, "lon": 20.003 }, { "lat": 10.004, "lon": 20.003 } ], "tags": { "leisure": "park" } },
+{ "type": "way", "id": 117, "geometry": [ { "lat": 10.03, "lon": 20.0 }, { "lat": 10.03, "lon": 20.0001 }, { "lat": 10.0301, "lon": 20.0001 }, { "lat": 10.0301, "lon": 20.0 }, { "lat": 10.03, "lon": 20.0 } ], "tags": { "building": "house" } },
+{ "type": "way", "id": 118, "geometry": [ { "lat": 9.996, "lon": 19.997 }, { "lat": 9.996, "lon": 19.9973 }, { "lat": 9.9963, "lon": 19.9973 }, { "lat": 9.9963, "lon": 19.997 }, { "lat": 9.996, "lon": 19.997 } ], "tags": { "railway": "station", "building": "train_station" } },
+{ "type": "way", "id": 119, "geometry": [ { "lat": 10.0035, "lon": 19.9965 }, { "lat": 10.0035, "lon": 19.9968 }, { "lat": 10.0038, "lon": 19.9968 }, { "lat": 10.0038, "lon": 19.9965 }, { "lat": 10.0035, "lon": 19.9965 } ], "tags": { "amenity": "hospital" } },
+{ "type": "way", "id": 120, "geometry": [ { "lat": 9.9975, "lon": 20.0035 }, { "lat": 9.9975, "lon": 20.0036 }, { "lat": 9.9976, "lon": 20.0036 }, { "lat": 9.9976, "lon": 20.0035 }, { "lat": 9.9975, "lon": 20.0035 } ], "tags": { "amenity": "library", "building": "yes" } }
+]
+}

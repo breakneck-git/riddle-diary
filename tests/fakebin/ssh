@@ -1,0 +1,32 @@
+#!/bin/sh
+# Поддельный ssh для tests/deploy_spec.lua: usage `ssh kindle "<команда>"`. Команда — в $FAKE_DIR/log,
+# ответ по сценарию. Команды с grep исполняются по-настоящему над $FAKE_DIR/crash.log (вместо
+# /mnt/us/koreader/crash.log): в нём две старые строки «dev restart requested», каждый принятый touch
+# restart добавляет новую. Сценарии:
+#   `cat >путь` — stdin пишется в лог строкой «put путь: содержимое» (так deploy.sh кладёт файл на устройство)
+#   FAKE_PIDOF=n — код возврата pidof (0: KOReader запущен; 255: обрыв связи)
+#   FAKE_LOSE=n — первые n touch restart пропадают (гонка со стартом плагина): в лог ничего не пишется
+#   FAKE_TRUNCATE=1 — как koreader.sh при старте: на рестарте голова лога срезается, остаётся только новая строка
+#   FAKE_GREP_FAIL_AFTER=n — опросы лога с n+1-го: обрыв связи (код 255, пустой вывод)
+cmd="$2"
+echo "$cmd" >> "$FAKE_DIR/log"
+LOGFILE="$FAKE_DIR/crash.log"
+if [ ! -e "$LOGFILE" ]; then
+  printf '%s\n' "10/23/26-10:25:47 INFO  riddle: dev restart requested" \
+    "10/23/26-18:02:11 INFO  riddle: dev restart requested" > "$LOGFILE"
+fi
+case "$cmd" in
+  "cat >"*) printf 'put %s: %s\n' "${cmd#cat >}" "$(cat)" >> "$FAKE_DIR/log" ;;
+  *pidof*) exit "${FAKE_PIDOF:-0}" ;;
+  *grep*)
+    g=$(cat "$FAKE_DIR/greps" 2>/dev/null || echo 0); g=$((g + 1)); echo "$g" > "$FAKE_DIR/greps"
+    if [ -n "$FAKE_GREP_FAIL_AFTER" ] && [ "$g" -gt "$FAKE_GREP_FAIL_AFTER" ]; then exit 255; fi
+    sh -c "$(printf '%s' "$cmd" | sed "s#/mnt/us/koreader/crash.log#$LOGFILE#")" ;;
+  *"touch /mnt/us/riddle/restart"*)
+    n=$(cat "$FAKE_DIR/touches" 2>/dev/null || echo 0); n=$((n + 1)); echo "$n" > "$FAKE_DIR/touches"
+    if [ "$n" -gt "${FAKE_LOSE:-0}" ]; then
+      line=$(printf '10/25/26-11:00:%02d INFO  riddle: dev restart requested' "$n")
+      if [ -n "$FAKE_TRUNCATE" ]; then echo "$line" > "$LOGFILE"; else echo "$line" >> "$LOGFILE"; fi
+    fi ;;
+esac
+exit $?

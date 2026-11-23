@@ -1,0 +1,4 @@
+#!/bin/sh
+# Поддельный scp для tests/deploy_spec.lua: ничего не копирует.
+echo "scp $*" >> "$FAKE_DIR/log"
+exit 0
