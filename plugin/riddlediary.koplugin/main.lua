@@ -462,13 +462,11 @@ function RiddleDiary:openDiary()
 end
 
 -- sleep closes the seal by the on_sleep rule, diary open or not (the widget also resets its page on Suspend);
--- no seal in the config: nothing to close, on_sleep only re-arms the followup
+-- no seal in the config: nothing to close, on_sleep only re-arms the followup. The controller logs a real close
+-- itself ("seal closed by sleep")
 function RiddleDiary:onSuspend()
     local ctl = state.controller
-    if ctl then
-        ctl:on_sleep()
-        if ctl.seal:closes_on_sleep() then logger.info("riddle: suspend, seal locked") end
-    end
+    if ctl then ctl:on_sleep() end
     -- the diary widget (above the plugin in the window stack) got Suspend first and freed the runner
     startSync("suspend")
 end

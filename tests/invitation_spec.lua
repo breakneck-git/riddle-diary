@@ -90,13 +90,13 @@ function T.test_followup_flag_comes_from_controller_when_seal_is_off()
   t.ok(body and body:find("take_followup", 1, true), "respond берёт хвост у контроллера")
 end
 
--- печати нет — на сне нечего закрывать, и лог «seal locked» не врёт
-function T.test_suspend_logs_seal_locked_only_when_sealed()
+-- о закрытии сном пишет только контроллер и только по факту (Controller:_close, «seal closed by sleep»): у плагина
+-- своей строки нет — она писалась и про уже закрытую печать (ревью Task 7)
+function T.test_suspend_leaves_seal_log_to_controller()
   local body = MAIN:match("function RiddleDiary:onSuspend%(%)(.-)\nend")
   t.ok(body, "onSuspend найден")
-  local guard = body:find("ctl.seal:closes_on_sleep()", 1, true)
-  local line = body:find("seal locked", 1, true)
-  t.ok(guard and line and guard < line, "«seal locked» только под ctl.seal:closes_on_sleep()")
+  t.ok(body:find("ctl:on_sleep()", 1, true), "сон — контроллеру")
+  t.ok(not body:find("seal locked", 1, true), "своей строки о печати нет")
 end
 
 function T.test_nothing_outside_widget_touches_invitation()

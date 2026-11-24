@@ -75,7 +75,7 @@ function Controller.new(deps)
   }
   self = setmetatable(self, {
     __index = function(t, k)
-      if k == "seal_open" then return t.seal.open end
+      if k == "seal_open" then return t:_data_ok() end
       return Controller[k]
     end,
   })
@@ -641,9 +641,11 @@ function Controller:_gen_tail_due()
   return sec ~= nil and not persona.is_map(sec.name)
 end
 
--- данные пользователя (память, лор, знания, задачи) доступны: печать открыта или её нет. Одно условие на все пути,
--- что их читают или отправляют модели (spec §4)
+-- данные пользователя (память, лор, знания, задачи) доступны: печать открыта или её нет. Одно условие и одна точка на
+-- все пути, что читают печать (spec §4; аксессор seal_open — тоже сюда): простой проверяется здесь, поэтому печать,
+-- простоявшая срок, закрыта и для читателя без страницы и без таймера (роза, ключ, хвост после нового открытия)
 function Controller:_data_ok()
+  self:seal_check()
   return self.seal.open
 end
 
@@ -1162,7 +1164,11 @@ end
 function Controller:seal_toggle()
   local s = self.seal
   if not s.configured then return nil end
-  if self:_close("key") then return texts.seal_closed end
+  -- открыта ли — через _data_ok: печать, закрытая простоем без таймера, ключ открывает, а не закрывает
+  if self:_data_ok() then
+    self:_close("key")
+    return texts.seal_closed
+  end
   if not s:unlock(self.deps.now()) then return nil end
   self:_opened()
   local welcome = self:_pick(self:texts("welcomes"))
@@ -1209,6 +1215,8 @@ end
 -- решению начала страницы (job.write) — чернила растворились, память — единственная копия. Сдвиг считается до
 -- разбора: печать, сдвинутая в пути, а не самим ответом
 function Controller:finish(job, payload, err)
+  -- простой, истёкший в пути, — до сверки эпохи: иначе его закрыл бы разбор ответа (_data_ok), уже после сверки
+  self:seal_check()
   local stale = job.mode == "open" and job.epoch ~= nil and job.epoch ~= self.seal_epoch
   local text, action = self:_safe_answer(job, function()
     if payload == nil then return nil, err end

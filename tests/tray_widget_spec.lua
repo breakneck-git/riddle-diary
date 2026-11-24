@@ -88,8 +88,9 @@ end
 -- управляемые источники угла: TM — часы (время открытия, дальше идут вместе с clock), PW — заряд, NET — связь
 local TM, PW, NET
 
--- настоящий Diary.init на стенде; d.pushes — { x, y, w, h, mode } каждого обновления экрана
-local function open_diary(opts)
+-- настоящий Diary.init на стенде; d.pushes — { x, y, w, h, mode } каждого обновления экрана. fields — поля виджета
+-- до init (controller)
+local function open_diary(opts, fields)
   clock, timeline, LOG = 0, {}, {}
   Diary.map_kept = nil
   TM = { hour = 21, min = 40, sec = 0 }
@@ -110,6 +111,7 @@ local function open_diary(opts)
   d.pushes = {}
   d.push = function(_, x, y, w, h, mode) d.pushes[#d.pushes + 1] = { x = x, y = y, w = w, h = h, mode = mode } end
   d.onPageDone = function(self) self.page = nil end -- страница не уходит в ответ: здесь только угол
+  for k, v in pairs(fields or {}) do d[k] = v end
   d:init()
   return d
 end
@@ -753,6 +755,24 @@ function T.test_clip_shortens_word_ending_in_invalid_utf8_byte()
   local right = 0
   for _, g in ipairs(d.answer.block.glyphs) do right = math.max(right, g.x + 10) end
   t.ok(right <= CFG.margin + maxw, "тушь не шире ряда: " .. right)
+  d:onCloseWidget()
+end
+
+-- ревью Task 7: контроллер живёт весь процесс, виджет — до закрытия (onCloseWidget снимает таймеры). Открытие
+-- дневника взводит таймер простоя заново: печать, открытая до прошлого закрытия, закроется в свой срок
+function T.test_open_arms_seal_idle_timer()
+  local controller, stand = require("riddle.controller"), require("seal_stand")
+  local shift = 0
+  local ctl = controller.new{ cfg = { seal = stand.rules({ key = true, minutes = 30 }) },
+    now = function() return 1000 + math.floor(clock) + shift end, random = function() return 1 end, log = nop }
+  clock = 0
+  ctl:seal_toggle() -- открыта в 1000
+  shift = 600 -- дневник закрыли и через 10 минут открыли снова
+  local d = open_diary(nil, { controller = ctl })
+  run(1199)
+  t.eq(ctl.seal.open, true, "срок не вышел")
+  run(2)
+  t.eq(ctl.seal.open, false, "через 30 минут от открытия ключом — закрыта таймером")
   d:onCloseWidget()
 end
 

@@ -1688,6 +1688,36 @@ function T.test_rose_sealed_goes_to_seal()
   t.eq(d.map, nil, "карты нет")
 end
 
+-- ревью Task 7: печать открыли, дневник закрыли, через два часа открыли снова — таймера не было, но простой истёк:
+-- роза не открывает карту (на ней имя владельца)
+function T.test_rose_after_idle_no_map()
+  local d = map_diary()
+  local wall = 1000
+  d.controller = ctl(stand.rules({ key = true, minutes = 30 }), { now = function() return wall end })
+  d.controller:seal_toggle() -- ключ узнан в 1000
+  wall = 1000 + 2 * 3600
+  page_done(d, strokes_of("rose_ccw"))
+  run(1)
+  t.eq(d.map, nil, "карты нет")
+  t.eq(count("riddle: map open"), 0)
+end
+
+-- ревью Task 7 (M12): карта открыта дольше срока простоя (её resetPage снял таймер) — после возврата на страницу
+-- печать закрыта
+function T.test_map_longer_than_idle_closes_on_back()
+  local d = map_diary()
+  local jump = 0
+  d.controller = ctl(stand.rules({ key = true, minutes = 30 }),
+    { now = function() return 1000 + math.floor(clock) + jump end })
+  d.controller:seal_toggle()
+  d:openMap("rose")
+  t.ok(d.map, "карта открыта")
+  jump = 3600
+  d:closeMap("rose")
+  run(1)
+  t.eq(d.controller.seal.open, false, "после возврата на страницу печать закрыта")
+end
+
 function T.test_rose_during_ponder_waits_answer()
   local d = map_diary()
   local idles = 0

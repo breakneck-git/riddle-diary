@@ -212,6 +212,36 @@ function T.test_resume_checks_idle()
 end
 
 -- таймер простоя после ответа: N минут без записи — печать закрыта, ответ стёрт, на экране первая строка
+-- простой закрыл печать раньше таймера — её прочёл кто-то другой (часы ушли вперёд, seal_open): таймер, сработав,
+-- всё равно стирает реплику открытой печати
+function T.test_idle_timer_wipes_after_reader_closed()
+  local d, ctl = diary({ key = true, minutes = 30 })
+  ctl:seal_toggle()
+  arrive(d, "Я помню")
+  run(60)
+  slept = 3600 -- часы вперёд без сна
+  t.ok(not ctl.seal_open, "читатель увидел простой и закрыл печать")
+  t.ok(d.answer, "реплика ещё на экране")
+  run(1800)
+  t.eq(d.answer, nil, "таймер стёр реплику открытой печати")
+  t.eq(count("SHOWN invitation"), 1)
+end
+
+-- ревью Task 7 (M5): таймер простоя один — новый взвод снимает прошлый
+function T.test_one_idle_timer()
+  local d, ctl = diary({ key = true, minutes = 30 })
+  ctl:seal_toggle()
+  arrive(d, "Я помню")
+  local first = d.seal_task
+  t.ok(first and d.tasks[first], "таймер взведён ответом")
+  d:armSeal()
+  t.ok(d.seal_task and d.seal_task ~= first, "новый таймер")
+  t.eq(d.tasks[first], nil, "прошлый снят")
+  local n = 0
+  for _, task in ipairs(timeline) do if task.fn == first then n = n + 1 end end
+  t.eq(n, 0, "прошлого нет в планировщике")
+end
+
 function T.test_idle_timer_wipes_the_reply()
   local d, ctl = diary({ key = true, minutes = 30 })
   ctl:seal_toggle()

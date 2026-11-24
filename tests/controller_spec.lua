@@ -1033,6 +1033,11 @@ function T.test_sleep_closes_only_with_on_sleep()
   t.eq(env.ctrl:finish(job, job.run()), nil, "ответ открытой печати после сна не показывается")
   t.ok(logged(env, "riddle: answer dropped, seal changed"), table.concat(env.logs, "\n"))
   t.ok(logged(env, "riddle: seal closed by sleep"), table.concat(env.logs, "\n"))
+  -- второй сон (виджет и плагин зовут on_sleep оба) — закрывать нечего, строки нет
+  env.ctrl:on_sleep()
+  local n = 0
+  for _, l in ipairs(env.logs) do if has(l, "seal closed by sleep") then n = n + 1 end end
+  t.eq(n, 1, "о закрытии — одна строка")
 end
 
 -- простой (spec §6, правило minutes) ---------------------------------------------------------------------------
@@ -1086,6 +1091,40 @@ function T.test_timer_closes_and_drops_in_flight()
   t.eq(env.ctrl:seal_left(), nil, "ответ закрытую не открыл и отсчёта не начал")
   t.ok(logged(env, "riddle: answer dropped, seal changed"), table.concat(env.logs, "\n"))
   for _, l in ipairs(env.logs) do t.ok(not has(l, "СЕКРЕТ"), "текста ответа в логе нет: " .. l) end
+end
+
+-- ревью Task 7: печать, простоявшая срок, закрыта для любого читателя — аксессор seal_open (роза, карта виджета)
+-- видит её закрытой без страницы и без таймера
+function T.test_seal_open_sees_idle()
+  local env = make({ seal = { key = true, minutes = 30 } })
+  env:unlock()
+  env.now_value = 1000 + 3600
+  t.ok(not env.ctrl.seal_open, "после простоя закрыта")
+  t.ok(logged(env, "riddle: seal closed by idle"), table.concat(env.logs, "\n"))
+end
+
+-- ключ после простоя открывает печать (её закрыл простой), а не закрывает: владельцу не рисовать ключ второй раз
+function T.test_key_after_idle_opens()
+  local env = keyed({ seal = { key = true, minutes = 30 } })
+  env.ctrl:key_page(O.owner_03)
+  t.ok(env.ctrl.seal_open)
+  env.now_value = 1000 + 3600
+  local text = env.ctrl:key_page(O.owner_04)
+  t.ok(in_list(texts.welcomes, text), "ключ открыл печать приветствием: " .. tostring(text))
+  t.ok(env.ctrl.seal_open)
+end
+
+-- ответ открытой печати пришёл после срока, а таймер не успел (разбор ответа сам видит простой): не показывается
+function T.test_answer_after_deadline_dropped_without_timer()
+  local env = make({ seal = { key = true, minutes = 30 } })
+  env:unlock()
+  env.now_value = 1000 + 1790
+  env:say("мои дела", "СЕКРЕТ")
+  local job = env.ctrl:begin(PNG)
+  t.ok(job and not job.closed, "запрос собран при открытой печати")
+  env.now_value = 1000 + 1830
+  t.eq(env.ctrl:finish(job, job.run()), nil, "ответ после срока не показывается")
+  t.ok(not env.ctrl.seal_open)
 end
 
 function T.test_session_continues_after_sleep()
@@ -1212,6 +1251,26 @@ function T.test_followup_async_begin_run_finish()
   t.eq(m.set_summaries[1].sid, 1)
   t.eq(m.set_summaries[1].text, "Мне писали о прошлом.")
   t.eq(env.ctrl:begin_followup(), nil, "пересказ есть — пересказывать нечего")
+end
+
+-- ревью Task 7: истёкший простой видят все читатели печати, а не только начало страницы. Хвост после простоя (виджет
+-- открыт заново, таймера не было) — ни лора, ни памяти модели
+function T.test_followup_after_idle_sends_no_memory()
+  local env = make({ now = 0, seal = { key = true, minutes = 30 } })
+  env:unlock()
+  local m = past_session(env) -- now = 5 ч: простой давно истёк
+  env.files[LORE] = "## Мир\nЛОР-ТЕКСТ"
+  env.mtimes[LORE] = 777
+  local job = env.ctrl:begin_followup()
+  if job then
+    env.script = { { text = "пересказ" } }
+    job.run()
+  end
+  for _, call in ipairs(env.llm_calls) do
+    t.ok(not has(json.encode(call.messages), "ЗАПИСЬ-ПРОШЛОЙ"), "память ушла модели после простоя")
+  end
+  t.eq(#m.imported, 0, "лор не читан")
+  t.ok(not env.ctrl.seal_open, "печать закрыта")
 end
 
 -- таймаут, отмена, ошибка модели, исключение — пересказ не сохраняется (повторится в следующий раз)

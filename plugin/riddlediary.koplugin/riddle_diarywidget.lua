@@ -465,6 +465,9 @@ function Diary:init()
     self:hookInput()
     self:raiseAutosuspend()
     logger.info("riddle: diary open, RSS KB", rssKB())
+    -- the controller outlives the widget (onCloseWidget drops the timers): a seal opened before the last close gets
+    -- its idle timer back
+    self:armSeal()
     self:maybeStartGen()
     self:maybeStartTest()
 end
@@ -745,11 +748,15 @@ end
 -- into one refresh -- the reply goes onto the canvas before it.
 function Diary:onResume()
     if not self.canvas then return end
-    -- KOReader's timers do not run in sleep: the seal's idle rule is checked here; a seal closed by it wipes the kept
-    -- reply (resetPage frees it) -- the first line of a clean page shows instead
+    -- KOReader's timers do not run in sleep: the seal's idle rule is checked here. A kept reply shown under another
+    -- seal (the seal moved since: idle, here or at the suspend) is wiped (resetPage frees it) -- the first line of a
+    -- clean page shows instead
     local ctl = self.controller
-    local closed = ctl ~= nil and ctl:seal_check()
-    local a = not closed and self.answer or nil
+    local a = self.answer
+    if ctl then
+        ctl:seal_check()
+        if a and a.seal_epoch ~= ctl.seal_epoch then a = nil end
+    end
     if a then
         local r = a.block.rect
         self:paintRegion(r.x, r.y, r.w, r.h)
@@ -775,9 +782,10 @@ end
 
 -- The seal's idle timer (rule minutes, spec 2026-11-20-seal-key §6): runs to the controller's deadline
 -- (Controller:seal_left -- the last entry plus N minutes), the previous one dropped. Armed after every reply
--- (revealAnswer), at wake-up and back from a mode: the deadline is the controller's, so arming again never moves it.
--- When it fires the controller checks the rule itself (the clock may have moved): closed -- the reply is wiped;
--- still open -- armed again to the new deadline
+-- (revealAnswer), at open, at wake-up and back from a mode: the deadline is the controller's, so arming again never
+-- moves it. When it fires the controller checks the rule itself (seal_open; the clock may have moved): closed -- by this
+-- check or by an earlier reader -- the reply is wiped; still open -- armed again to the new deadline. A close by the key
+-- reveals its phrase, and that arming drops the timer
 function Diary:armSeal()
     self:cancel(self.seal_task)
     self.seal_task = nil
@@ -787,7 +795,7 @@ function Diary:armSeal()
     self.seal_task = self:schedule(math.max(0, left), function()
         self.seal_task = nil
         local c = self.controller
-        if c and c:seal_check() then self:wipeSealed() else self:armSeal() end
+        if c and not c.seal_open then self:wipeSealed() else self:armSeal() end
     end)
 end
 
@@ -1706,7 +1714,9 @@ function Diary:revealAnswer(text, top, unlocked, kind, release, page)
         block = layoutText(self.face_answer, text, CFG.margin, self:textFloor() + 10, self.w - 2 * CFG.margin, limit)
         if block.clipped then logger.info(string.format("riddle: answer clipped to %d lines", block.clipped)) end
     end
-    local a = { block = block, layer = newLayer(block.rect), lvl = 0, i = 0, phase = "reveal", t0 = now(), kind = kind, release = release, page = page }
+    -- seal_epoch: the seal the reply was shown under (onResume wipes a kept reply once the seal has moved)
+    local a = { block = block, layer = newLayer(block.rect), lvl = 0, i = 0, phase = "reveal", t0 = now(), kind = kind, release = release, page = page,
+                seal_epoch = self.controller and self.controller.seal_epoch }
     self.answer = a
     if unlocked then self:scheduleFollowup() end
     self:armSeal() -- a reply (or the key) may have moved the seal's idle deadline
