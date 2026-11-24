@@ -22,13 +22,18 @@ The diary's own texts and the documentation in `docs/` are in Russian.
   open-seal request (capped at 10,000 characters).
 - **Whose diary.** The default persona is built in. Set `whose` in the config to another character and
   world, and the diary generates that persona once and then speaks in its voice.
-- **Seal (optional).** With `password_variants` in the config, the diary first asks for a secret word
-  (fuzzy match, rotating hints from `hints`). Without it, the diary is open right away.
+- **Seal (optional).** A lock on your data, opened and closed by a drawn key — a sign you draw twice in
+  the diary to set it; the Kindle compares the drawing itself, without the model or the network. Rules in
+  the `seal` table of the config: `key`, close after `minutes` without an entry, close on sleep
+  (`on_sleep`), remember the closed-seal talk (`remember`), `off`. Under a closed seal the diary still
+  answers, but no memory, lore, Notion knowledge or tasks go to the model. Without a `seal` table the
+  diary is open right away.
 - **Notion knowledge (optional).** With a Notion integration token, a background process syncs your
   Notion pages and databases (read-only) into a local SQLite, and the diary can talk about them; it
   also finds a task database and occasionally reminds you of open tasks.
 - **Marauder's map.** Draw a wind rose (a circle with a cross) to open a parchment map of the streets and
-  buildings around you, with characters of the current persona walking on it.
+  buildings around you, with characters of the current persona walking on it. Opens only under an open
+  seal; when the seal closes after `minutes` without an entry, the map (and the status page) closes too.
 - **Status page.** Draw a triangle to see the Kindle's state: Wi-Fi network and IP, SSH, free memory and
   disk, uptime, build version, Notion sync result and a check of the LLM chain.
 - **Corner icons.** Time, battery and Wi-Fi in a corner of the page, updated every minute.
@@ -77,9 +82,10 @@ understand images. See `config.example.lua`.
    - `RIDDLE_TASKS_SOURCE` — name or id of the Notion task database (optional);
    - `RIDDLE_WHOSE` — whose diary it is (optional; default — the built-in persona).
 
-   The seal word and hints are read from a separate Lua file, `RIDDLE_SEAL`
-   (default `~/.config/riddle-diary/seal.lua`) with `password_variants` and `hints` fields as in
-   `config.example.lua`. No file — no seal. Without any LLM key the script writes nothing.
+   The seal rules are read from a separate Lua file, `RIDDLE_SEAL`
+   (default `~/.config/riddle-diary/seal.lua`) with a `seal` table as in `config.example.lua`
+   (for example `seal = { key = true, }`); a file with only the old `password_variants` (no `seal`) is refused. No file —
+   no seal. The key's sample is not in this file: the diary writes it on the device. Without any LLM key the script writes nothing.
    Fields the script doesn't write (for example your own `providers`) can be edited directly in
    `/mnt/us/riddle/config.lua` on the device; `config.example.lua` documents them all.
 3. **Upload the lore:** edit `lore.md` and run `tools/lore_push.sh [path]`. It copies the file to

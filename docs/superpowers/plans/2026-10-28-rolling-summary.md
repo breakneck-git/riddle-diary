@@ -24,7 +24,7 @@
 | Порядок системного сообщения | персона → лор → знание + правила совета → задачи → названия книг → пересказы прошлых сессий → READ_FORMAT → форматы ответа → `HISTORY_HEAD` (последним); дальше реплики истории, последней — картинка | `riddle/prompt.lua:291-345` |
 | `prompt.fit` (лимит знаков провайдера) режет по порядку | знание → лор → старые реплики истории (кроме последних `FIT_KEEP_RECENT = 6`) → пересказы прошлых сессий целиком, со старых → названия книг → дела блока до одного → укорачивание оставшихся реплик до `FIT_REPLY_MIN_CHARS = 300` | `riddle/prompt.lua:413-416`, `:432-604` |
 | Лимит входа | только у Groq: `max_input_chars = 10000`; цепочка: gemini-proxy → прямой Gemini (`gemini-3.5-flash-lite`) → Groq → BeatAPI | `tools/push_config.sh:80-104`, `riddle/llm.lua:105` |
-| Пересказ прошлой сессии: когда | хвост разблокировки: с печатью — после открытия, без печати — после первого ответа после старта и после каждого сна (`take_followup`) | `riddle/controller.lua:586-600`, `riddle_diarywidget.lua:422`, `:1299` |
+| Пересказ прошлой сессии: когда | хвост разблокировки: с печатью — после открытия, без печати — после первого ответа после старта и после каждого сна (`take_followup`) | `riddle/controller.lua:586-600`, `riddle_diarywidget.lua:422`, `:1299` *(слово заменено ключом, см. spec 2026-11-20)* |
 | … как | `_summary_job` берёт самую свежую прошлую сессию без пересказа (`memory:session` второе значение), все её реплики → `prompt.summarize` | `riddle/controller.lua:522-532`, `riddle/memory.lua:137-141` |
 | … чем | та же цепочка провайдеров, что ответ; в дочернем процессе через `remote_fn` (бюджет `ANSWER_BUDGET_S = 25`, попытка 12 с), `max_tokens = 800`, потолок дочернего `ceil_s = 30` | `riddle/controller.lua:19`, `:544`, `:562-573`; `riddle/app.lua:15-18`, `:356-366`; `riddle_diarywidget.lua:100`, `:520` |
 | … куда | `sessions.summary`; в промпт — 5 последних (`SUMMARIES_N = 5`) | `riddle/memory.lua:204-216`, `riddle/controller.lua:16`, `:150-153` |
@@ -230,7 +230,7 @@ User: `"Пересказ до этого: " .. earlier .. "\n\n"` (если `ear
 - Consumes: всё из Produces задачи 1.
 - Produces: `Controller.ROLL_AT = prompt.MAX_RECENT`, `Controller.ROLL_BATCH = 20`, `Controller.ROLL_MAX_TOKENS = 1200`, `Controller.ROLL_RETRY = 6`; job свёртки `{ kind = "roll", sid, upto, total, messages, opts = { max_tokens = ROLL_MAX_TOKENS } }`, job пересказа сессии получает `kind = "session"`, `opts = SUMMARY_OPTS`.
 
-- [ ] **Шаг 1: тесты (падают).** В `controller_memory_spec.lua` `make()` дополнить `remote_fn = function(m, wj, opts) return function() return { result = table.remove(env.script, 1) } end end` с записью вызова в `env.calls`, `absorb = function(p) return p.result, p.err end`; страница без печати — конфиг без `password_variants` (как `test_no_password_followup_due_after_start_and_sleep`, `tests/controller_spec.lua:676`) или открыть печать первой страницей.
+- [ ] **Шаг 1: тесты (падают).** В `controller_memory_spec.lua` `make()` дополнить `remote_fn = function(m, wj, opts) return function() return { result = table.remove(env.script, 1) } end end` с записью вызова в `env.calls`, `absorb = function(p) return p.result, p.err end`; страница без печати — конфиг без `password_variants` (как `test_no_password_followup_due_after_start_and_sleep`, `tests/controller_spec.lua:676`) или открыть печать первой страницей. *(слово заменено ключом, см. spec 2026-11-20)*
 
 ```lua
 function T.test_roll_due_when_window_full()        -- 19 страниц (38 реплик): take_followup ложь (после первого раза); 20-я: истина; begin_followup -> job.kind "roll"
@@ -247,7 +247,7 @@ function T.test_roll_off_without_table()           -- DROP TABLE rollups: 25 с�
 ```
 
 В `async_answer_spec.lua`: `T.test_async_roll_goes_to_runner` — по образцу `test_async_followup_summary_goes_to_runner` (строки 338-354): фейковая память с `rollup`/`unrolled`/`set_rollup` и `total = 40`; после ответа на страницу без разблокировки в runner уходит `kind = "summary"`, `opts.timeout_s > 0`; `d.runner:done({ result = { text = "С" } })` → `set_rollup` вызван с `upto` из job.
-В `controller_spec.lua`: `test_sealed_take_followup_is_false` (строка 684) остаётся зелёным без правок — свёртка не назрела.
+В `controller_spec.lua`: `test_sealed_take_followup_is_false` (строка 684) остаётся зелёным без правок — свёртка не назрела. *(слово заменено ключом, см. spec 2026-11-20)*
 
 - [ ] **Шаг 2:** `tests/run.sh` — FAIL на новых.
 
@@ -256,8 +256,8 @@ function T.test_roll_off_without_table()           -- DROP TABLE rollups: 25 с�
   - `_summary_job(with_roll)`: прежний путь → `kind = "session"`; иначе при `with_roll` — `_roll_job(cur)` (`cur` — первое значение `memory:session`). `begin_followup` → `_summary_job(true)` и `remote_fn(job.messages, false, job.opts)`; `on_unlocked_followup` → `_summary_job(false)`.
   - `_save_summary`: `roll` → `set_rollup(job.sid, prompt.roll_text(result.text), job.upto, now)` если текст непуст; сбросить `roll_hold`; строка лога `riddle: roll saved upto=%d chars=%d` (только числа).
   - `finish_followup`: у `roll` при ошибке, кроме `"cancelled"`, — `self.roll_hold = { sid = job.sid, at = job.total + ROLL_RETRY }`.
-  - После `_remember` в ветке открытой печати `_answer` (`controller.lua:462`) — `self.roll_due = true`, если `_roll_job` вернул бы job (проверка без сборки messages: `total` из `unrolled(sid, 0)` против `ROLL_AT` и `roll_hold`). Страницы считаются только в открытой печати: страница разблокировки реплик не пишет.
-  - `take_followup`: `local due = (not self.sealed and self.followup_due == true) or self.roll_due == true`, оба флага сбросить.
+  - После `_remember` в ветке открытой печати `_answer` (`controller.lua:462`) — `self.roll_due = true`, если `_roll_job` вернул бы job (проверка без сборки messages: `total` из `unrolled(sid, 0)` против `ROLL_AT` и `roll_hold`). Страницы считаются только в открытой печати: страница разблокировки реплик не пишет. *(слово заменено ключом, см. spec 2026-11-20)*
+  - `take_followup`: `local due = (not self.sealed and self.followup_due == true) or self.roll_due == true`, оба флага сбросить. *(слово заменено ключом, см. spec 2026-11-20)*
   - `_open_context`: `rolling = (pcall → memory:rollup(sid))` — текст или nil.
 
 - [ ] **Шаг 4:** `tests/run.sh` — «specs, OK».

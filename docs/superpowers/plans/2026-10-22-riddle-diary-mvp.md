@@ -1,5 +1,8 @@
 # riddle-diary MVP — план реализации
 
+> **Печать:** заветное слово (`password_variants`, `hints`, `hint_every`, `seal.matches`) в этом плане — история:
+> слово заменено графическим ключом, см. spec 2026-11-20 (`docs/superpowers/specs/2026-11-20-seal-key-design.md`).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Плагин KOReader на Kindle PW2 — магический дневник одной хозяйки: письмо пальцем, чернила растворяются без мерцания, печать с заветным словом из конфига, ответы бесплатной vision-LLM < 5 с, память в SQLite, лор, автозапуск при включении.
