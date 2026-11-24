@@ -1439,7 +1439,8 @@ function Diary:onPageDone()
     -- a sign is not a message: the page reaches neither the model nor the memory, nobody answers it; its mode opens in
     -- its turn in the queue, after the answer in flight. The triangle first and under any seal (the status page shows
     -- nothing of the diary; owner: «во всех случаях»); a rose of the winds only under an open seal (plan of the map).
-    -- Under a closed seal a page of 1–2 strokes is mostly a try at the seal word, not at a sign: no stroke file for it
+    -- Under a closed seal a page that is no triangle (a missed try at the seal key, say) gets no stroke file
+    -- (isSign, misses = not sealed)
     local ctl = self.controller
     -- an accidental touch (owner 2026-10-25): its PNG would be under png.MIN_SIDE on both sides
     local _, _, w, h = self:sampleBox(pg)
