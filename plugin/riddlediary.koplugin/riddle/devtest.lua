@@ -596,6 +596,29 @@ function devtest.install(Diary, h)
         end)
     end
 
+    -- the watchdog of a feed: the time it needs plus a margin (a feed that outlives it is lost: sleep dropped its ticks)
+    local function feedBudget(points)
+        local s = 5
+        for _, st in ipairs(points) do s = s + #st * 0.012 * 1.5 + 0.15 end
+        return s
+    end
+
+    -- poll every 0.25 s until want() holds: cb(ms since the call) or cb(-1) after ROSE_WAIT_S
+    function Diary:waitFor(want, cb)
+        local t0 = now()
+        local function poll()
+            local ms = time.to_ms(now() - t0)
+            if want() then
+                cb(math.floor(ms))
+            elseif ms >= ROSE_WAIT_S * 1000 then
+                cb(-1)
+            else
+                self:roseSchedule(0.25, poll)
+            end
+        end
+        poll()
+    end
+
     function Diary:runSignRounds(o)
         local tag, n, ctl = o.tag, o.n, self.controller
         -- asleep: a sleep since this run began (Diary.slept counts them; sleep closes the mode and the round's own
@@ -618,30 +641,14 @@ function devtest.install(Diary, h)
         end
         -- feedStrokes(points) -> then_(); the feed's ticks are cancelled by sleep, a dead feed is reported once
         local function feed(points, then_)
-            local feed_s = 5
-            for _, st in ipairs(points) do feed_s = feed_s + #st * 0.012 * 1.5 + 0.15 end
             local finished = false
             self:feedStrokes(points, nil, function()
                 finished = true
                 if not dead then then_() end
             end, function() return not dead and awake() end, tag)
-            self:roseSchedule(feed_s, function()
+            self:roseSchedule(feedBudget(points), function()
                 if not finished then aborted() end
             end)
-        end
-        -- poll until want() holds: cb(ms since t0) or cb(-1) on timeout
-        local function waitFor(want, t0, cb)
-            local function poll()
-                local ms = time.to_ms(now() - t0)
-                if want() then
-                    cb(math.floor(ms))
-                elseif ms >= ROSE_WAIT_S * 1000 then
-                    cb(-1)
-                else
-                    self:roseSchedule(0.25, poll)
-                end
-            end
-            poll()
         end
         local function cycle()
             if self.cur then -- a real finger is writing: never write under it
@@ -669,8 +676,7 @@ function devtest.install(Diary, h)
                 return
             end
             feed(o.first, function()
-                local t_open = now()
-                waitFor(o.is_open, t_open, function(open_ms)
+                self:waitFor(o.is_open, function(open_ms)
                     if open_ms < 0 then
                         logger.info(string.format("riddle: %s cycle %d open=-1 close=-1", tag, i))
                         self:roseSchedule(ROSE_PAUSE_S, cycle)
@@ -680,8 +686,7 @@ function devtest.install(Diary, h)
                     if o.steps then logger.info(string.format("riddle: %s cycle %d open=%d", tag, i, open_ms)) end
                     self:roseSchedule(ROSE_STAY_S, function()
                         feed(o.second, function()
-                            local t_close = now()
-                            waitFor(function() return not o.is_open() end, t_close, function(close_ms)
+                            self:waitFor(function() return not o.is_open() end, function(close_ms)
                                 if not awake() then
                                     -- sleep closed the mode, not the sign: not counted as a close
                                     logger.info(string.format("riddle: %s cycle %d open=%d close=-1 (sleep)", tag, i, open_ms))
@@ -739,6 +744,13 @@ function devtest.install(Diary, h)
     -- first stroke: a typo draws nothing. Sleep aborts the run, as in runSignRounds
     local SEAL_QUIET_S, SEAL_PAUSE_S = 8, 3
     function Diary:testSeal(s)
+        -- the controller is built once per process, at launch; the sample's path is fixed then (main.lua testKeyPath). A
+        -- testmode written after the launch finds the owner's controller: its "set the key" mode would write the owner's file
+        local ctl = self.controller
+        if not (ctl and ctl.key_path == require("riddle.app").TEST_KEY_PATH) then
+            logger.err("riddle: devtest seal: контроллер на ключе владельца — перезапусти KOReader после записи testmode, nothing was drawn")
+            return
+        end
         local names = devtest.parseSeal(s)
         for _, name in ipairs(names) do
             if not devtest.sealFigure(name) then
@@ -755,17 +767,6 @@ function devtest.install(Diary, h)
             dead = true
             self.seal_run = nil
             logger.info(string.format("riddle: devtest seal %s pages=%d", note, i))
-        end
-        -- poll until want() holds or limit_s passes -> cb(held)
-        local function waitUntil(want, limit_s, cb)
-            local waited = 0
-            local function poll()
-                if want() then return cb(true) end
-                if waited >= limit_s then return cb(false) end
-                waited = waited + 0.25
-                self:roseSchedule(0.25, poll)
-            end
-            poll()
         end
         local function words(text)
             local out = {}
@@ -790,8 +791,6 @@ function devtest.install(Diary, h)
             local name = names[i]
             run.phrase = nil
             local points = toPoints(devtest.sealFigure(name))
-            local feed_s = 5
-            for _, st in ipairs(points) do feed_s = feed_s + #st * 0.012 * 1.5 + 0.15 end
             local finished = false
             local function logged()
                 logger.info(string.format("riddle: devtest seal page %s -> %s", name, run.phrase and words(run.phrase) or "nil"))
@@ -800,19 +799,19 @@ function devtest.install(Diary, h)
             -- the phrase is on screen (or the page was a sign): wait for the reveal to end, close what opened
             local function settled()
                 if self.status then self:closeStatus("devtest") end
-                waitUntil(function() return not (self.answer and self.answer.phase == "reveal") end, ROSE_WAIT_S, logged)
+                self:waitFor(function() return not (self.answer and self.answer.phase == "reveal") end, logged)
             end
             self:feedStrokes(points, nil, function()
                 finished = true
                 if name == "tiny" then
                     return self:roseSchedule(SEAL_QUIET_S, settled)
                 end
-                waitUntil(function() return run.phrase ~= nil or self.status ~= nil end, ROSE_WAIT_S, function()
+                self:waitFor(function() return run.phrase ~= nil or self.status ~= nil end, function()
                     -- the page is over, the sign's mode needs its moment on screen before it is closed
                     self:roseSchedule(self.status and ROSE_PAUSE_S or 0, settled)
                 end)
             end, function() return not dead and awake() end, "SEAL")
-            self:roseSchedule(feed_s, function()
+            self:roseSchedule(feedBudget(points), function()
                 if not finished and not dead then over("aborted (feed lost)") end
             end)
         end

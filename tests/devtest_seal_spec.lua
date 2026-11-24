@@ -44,9 +44,10 @@ end
 
 local function fig(name) return devtest.sealFigure(name) end
 
-local function newDiary(dir)
+-- key_path — путь образца у контроллера двойника; по умолчанию тестовый, как у контроллера, собранного при testmode
+local function newDiary(dir, key_path)
   clock, log, jobs = 0, {}, {}
-  local Diary = { canvas = {}, status_opened = 0 }
+  local Diary = { canvas = {}, status_opened = 0, fed = 0, controller = { key_path = key_path or app.TEST_KEY_PATH } }
   function Diary:schedule(delay, fn)
     jobs[#jobs + 1] = { at = clock + delay * 1000, fn = fn }
     return jobs[#jobs]
@@ -83,6 +84,7 @@ local function newDiary(dir)
   end
   Diary.gd = { feedEvent = function(_, tevs)
     for _, tev in ipairs(tevs) do
+      Diary.fed = Diary.fed + 1
       if tev.id == -1 then
         cur = nil
         Diary:cancel(page_task)
@@ -108,10 +110,10 @@ local function tmpdir()
   return dir
 end
 
-local function start(content)
+local function start(content, key_path)
   local dir = tmpdir()
   local f = io.open(dir .. "/testmode", "w"); f:write(content); f:close()
-  return newDiary(dir), dir
+  return newDiary(dir, key_path), dir
 end
 
 local T = {}
@@ -266,6 +268,35 @@ function T.test_unknown_page_draws_nothing()
   t.eq(#lines("ERROR riddle: devtest seal unknown page oops"), 1, table.concat(log, "\n"))
   t.eq(#lines("riddle: devtest seal start"), 0)
   t.eq(#lines("riddle: devtest seal page"), 0, "ни одной страницы не нарисовано")
+end
+
+-- контроллер собирается раз за процесс: testmode, записанный после запуска, застаёт контроллер на ключе владельца —
+-- режим «задать ключ» писал бы его файл
+function T.test_controller_on_the_owners_key_draws_nothing()
+  local Diary = start("seal=A,A2", seal.KEY_PATH)
+  Diary:maybeStartTest()
+  Diary:run(30 * 60 * 1000)
+  t.eq(Diary.fed, 0, "ни одного события пера")
+  t.eq(#lines("ERROR riddle: devtest seal: контроллер на ключе владельца"), 1, table.concat(log, "\n"))
+  t.eq(#lines("riddle: devtest seal start"), 0)
+end
+
+function T.test_no_controller_draws_nothing()
+  local Diary = start("seal=A")
+  Diary.controller = nil
+  Diary:maybeStartTest()
+  Diary:run(30 * 60 * 1000)
+  t.eq(Diary.fed, 0)
+  t.eq(#lines("ERROR riddle: devtest seal: контроллер на ключе владельца"), 1)
+end
+
+function T.test_controller_on_the_test_key_runs()
+  local Diary = start("seal=A", app.TEST_KEY_PATH)
+  Diary:maybeStartTest()
+  Diary:run(30 * 60 * 1000)
+  t.ok(Diary.fed > 0, "перо рисовало")
+  t.eq(#lines("riddle: devtest seal done pages=1"), 1, table.concat(log, "\n"))
+  t.eq(#lines("ERROR"), 0)
 end
 
 function T.test_sleep_aborts_the_run()
