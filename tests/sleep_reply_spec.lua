@@ -211,6 +211,23 @@ function T.test_resume_checks_idle()
   t.eq(count("SHOWN invitation"), 1, "одна")
 end
 
+-- сон снимает таймер простоя: срок, наставший во сне, не рисует ничего до пробуждения (экран у заставки) — проверяет
+-- его onResume
+function T.test_sleep_drops_idle_timer()
+  local d, ctl = diary({ key = true, minutes = 30 })
+  ctl:seal_toggle()
+  arrive(d, "Я помню")
+  run(60)
+  d:onSuspend()
+  run(3600)
+  t.eq(count("SHOWN invitation"), 0, "во сне не рисуется")
+  t.eq(count("seal idle"), 0)
+  t.ok(d.answer, "реплика ждёт пробуждения")
+  d:onResume()
+  t.eq(d.answer, nil, "пробуждение стёрло реплику")
+  t.eq(count("SHOWN invitation"), 1)
+end
+
 -- таймер простоя после ответа: N минут без записи — печать закрыта, ответ стёрт, на экране первая строка
 -- простой закрыл печать раньше таймера — её прочёл кто-то другой (часы ушли вперёд, seal_open): таймер, сработав,
 -- всё равно стирает реплику открытой печати

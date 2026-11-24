@@ -909,4 +909,94 @@ function T.test_answer_in_flight_not_shown_after_key()
   t.eq(d.inflight, 0, "страница больше не ждёт")
 end
 
+-- Простой печати на карте и странице состояния (Notion 42213e60-bc8d-8131; владелец 2026-11-25: «да» — таймер идёт и
+-- там, по сроку печать закрыта, на экране чистая страница дневника). Часы контроллера идут с планировщиком, сон уводит
+-- их вперёд (slept). Печать открывает страница-ключ, режим — знак пером. Ключ — «буква А», не роза (образец стенда —
+-- роза владельца: роза пером сдвинула бы печать, а не открыла карту)
+local slept = 0
+local function sealed(raw)
+  slept = 0
+  local d = diary({ cfg = { seal = stand.rules(raw) }, load_key = function() return { TF.letter_a, TF.letter_a } end,
+                    now = function() return 1000 + math.floor(clock) + slept end })
+  page_done(d, strokes_of(TF, "letter_a"))
+  t.ok(d.controller.seal_open, "ключ открыл печать")
+  return d
+end
+
+-- режим открывается в свою очередь — после приветствия ключа
+local function draw_sign(d, F, name)
+  page_done(d, strokes_of(F, name))
+  run(30)
+end
+
+-- карта закрывается сама через map_idle_s без касаний: срок печати — меньше, чтобы его было видно
+function T.test_map_closes_on_seal_idle()
+  t.ok(60 < Diary.CFG.map_idle_s, "срок печати раньше автозакрытия карты")
+  local d = sealed({ key = true, minutes = 1 })
+  draw_sign(d, RF, "rose_ccw")
+  t.ok(d.map, "карта открыта")
+  local invites, pushes = d.invite, #d.pushes
+  run(60 - clock - 1)
+  t.ok(d.map, "до срока стоит")
+  t.ok(d.controller.seal_open)
+  run(2)
+  t.eq(d.map, nil, "по сроку карта закрыта")
+  t.ok(not d.controller.seal_open, "печать закрыта")
+  t.eq(d.invite, invites + 1, "на экране первая строка чистой страницы")
+  t.ok(#d.pushes > pushes and d.pushes[#d.pushes] == "full", "дневник — полным обновлением")
+  t.eq(count("riddle: map close (seal)"), 1)
+  run(3600)
+  t.eq(d.invite, invites + 1, "первая строка одна")
+end
+
+function T.test_status_closes_on_seal_idle()
+  local d = sealed({ key = true, minutes = 30 })
+  draw_sign(d, TF, "equilateral")
+  t.ok(d.status, "страница состояния открыта")
+  local invites = d.invite
+  run(1800 - clock - 1)
+  t.ok(d.status, "до срока стоит")
+  t.ok(d.controller.seal_open)
+  run(2)
+  t.eq(d.status, nil, "по сроку закрыта")
+  t.ok(not d.controller.seal_open, "печать закрыта")
+  t.eq(d.invite, invites + 1, "на экране первая строка чистой страницы")
+  t.eq(d.pushes[#d.pushes], "full")
+  t.eq(count("riddle: status close (seal)"), 1)
+end
+
+-- правило minutes двигает только запись: страница-режим открыта по-прежнему до своего закрытия
+function T.test_map_stays_without_minutes()
+  local d = sealed({ key = true })
+  draw_sign(d, RF, "rose_ccw")
+  run(Diary.CFG.map_idle_s - 31) -- карта открылась не раньше 30 с назад
+  t.ok(d.map, "карта стоит до своего автозакрытия")
+  t.ok(d.controller.seal_open)
+end
+
+function T.test_status_stays_without_minutes()
+  local d = sealed({ key = true })
+  draw_sign(d, TF, "equilateral")
+  run(10 * 3600)
+  t.ok(d.status, "страница стоит")
+  t.ok(d.controller.seal_open)
+end
+
+-- сон на карте и пробуждение после срока: таймеры во сне не идут — пробуждение само закрывает печать, на экране
+-- первая строка чистой страницы, карты нет
+function T.test_resume_after_idle_on_map()
+  local d = sealed({ key = true, minutes = 1 })
+  draw_sign(d, RF, "rose_ccw")
+  t.ok(d.map)
+  local invites = d.invite
+  d:onSuspend()
+  slept = 2 * 3600
+  d:onResume()
+  t.eq(d.map, nil, "карты нет")
+  t.ok(not d.controller.seal_open, "печать закрыта")
+  t.eq(d.invite, invites + 1, "первая строка чистой страницы")
+  run(3600)
+  t.eq(d.invite, invites + 1, "одна")
+end
+
 t.run(T)

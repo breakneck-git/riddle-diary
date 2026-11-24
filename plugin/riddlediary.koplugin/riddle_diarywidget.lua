@@ -739,6 +739,9 @@ function Diary:onSuspend()
     self:cancelSummary()
     local keep = self:replySurvivesSleep()
     if keep then self:finishReveal(self.answer) end
+    -- the seal's idle timer outlives a page reset, not a sleep: a deadline passed in sleep is onResume's to check
+    self:cancel(self.seal_task)
+    self.seal_task = nil
     self:resetPage(keep)
     logger.info("riddle: suspend, page wiped, RSS KB", rssKB(), keep and "(reply kept)" or "")
 end
@@ -783,9 +786,11 @@ end
 -- The seal's idle timer (rule minutes, spec 2026-11-20-seal-key §6): runs to the controller's deadline
 -- (Controller:seal_left -- the last entry plus N minutes), the previous one dropped. Armed after every reply
 -- (revealAnswer), at open, at wake-up and back from a mode: the deadline is the controller's, so arming again never
--- moves it. When it fires the controller checks the rule itself (seal_open; the clock may have moved): closed -- by this
--- check or by an earlier reader -- the reply is wiped; still open -- armed again to the new deadline. A close by the key
--- reveals its phrase, and that arming drops the timer
+-- moves it. The timer is the seal's, not the page's: a page reset (a mode's open and close) keeps it -- it runs on the
+-- map and the status page too (owner 2026-11-25); a sleep drops it (onSuspend). When it fires the controller checks the
+-- rule itself (seal_open; the clock may have moved): closed -- by this check or by an earlier reader -- the mode on
+-- screen closes (a clean diary page), or else the reply is wiped; still open -- armed again to the new deadline. A
+-- close by the key reveals its phrase, and that arming drops the timer
 function Diary:armSeal()
     self:cancel(self.seal_task)
     self.seal_task = nil
@@ -795,7 +800,15 @@ function Diary:armSeal()
     self.seal_task = self:schedule(math.max(0, left), function()
         self.seal_task = nil
         local c = self.controller
-        if c and not c.seal_open then self:wipeSealed() else self:armSeal() end
+        if c and c.seal_open then
+            self:armSeal()
+        elseif self.map then
+            self:closeMap("seal")
+        elseif self.status then
+            self:closeStatus("seal")
+        else
+            self:wipeSealed()
+        end
     end)
 end
 
@@ -823,11 +836,15 @@ function Diary:finishReveal(a)
     a.task = nil -- the page reset unschedules it; nothing waits behind the reply any more
 end
 
--- keep_answer: the reply on screen stays (its layer is not freed); the rest of the page is reset
+-- keep_answer: the reply on screen stays (its layer is not freed); the rest of the page is reset. The seal's idle timer
+-- is not the page's: it stays (armSeal)
 function Diary:resetPage(keep_answer)
     self.epoch = self.epoch + 1
-    for fn in pairs(self.tasks) do UIManager:unschedule(fn) end
-    self.tasks = {}
+    local seal_task = self.seal_task
+    for fn in pairs(self.tasks) do
+        if fn ~= seal_task then UIManager:unschedule(fn) end
+    end
+    self.tasks = seal_task and { [seal_task] = true } or {}
     self.sink_task, self.idle_task, self.corner_task, self.gc_task, self.followup_task = nil, nil, nil, nil, nil
     self.gc = nil
     self.cur, self.active_slot, self.corner_from, self.dirty = nil, nil, nil, nil
@@ -2011,8 +2028,9 @@ function Diary:startMapJob()
     if not ok then logger.info("riddle: map job not started: " .. tostring(err)) end
 end
 
--- why: "rose" | "phrase" | "idle" | "devtest" -> a clean diary page with the invitation, a full refresh, then as after an answer
--- (the followup goes on, maybeIdle); "sleep" | "exit" -> nothing drawn (the screensaver, KOReader own the screen)
+-- why: "rose" | "phrase" | "idle" | "seal" (the seal's idle rule, armSeal) | "devtest" -> a clean diary page with the
+-- invitation, a full refresh, then as after an answer (the followup goes on, maybeIdle); "sleep" | "exit" -> nothing
+-- drawn (the screensaver, KOReader own the screen)
 function Diary:closeMap(why)
     local view = self.map
     if not view then return end
@@ -2038,7 +2056,7 @@ function Diary:backToDiary()
     self:trayShow("back")
     self:push(0, 0, self.w, self.h, "full")
     if followup then self:scheduleFollowup() end
-    self:armSeal() -- the mode's resetPage dropped the idle timer
+    self:armSeal() -- the idle timer anew from the controller's deadline: the wall clock may have jumped meanwhile
     self:maybeIdle()
 end
 
@@ -2168,8 +2186,8 @@ function Diary:statusModelRow(model)
     self:push(0, r.y, self.w, math.max(r.h, nr.h), "ui")
 end
 
--- why: "touch" -> back to the diary (backToDiary); "sleep" | "exit" -> nothing drawn (the screensaver, KOReader own
--- the screen). The model's probe goes with the page
+-- why: "touch" | "seal" (the seal's idle rule, armSeal) -> back to the diary (backToDiary); "sleep" | "exit" -> nothing
+-- drawn (the screensaver, KOReader own the screen). The model's probe goes with the page
 function Diary:closeStatus(why)
     if not self.status then return end
     self.status = nil
