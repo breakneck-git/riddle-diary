@@ -254,14 +254,17 @@ function devtest.install(Diary, h)
 
     -- dev only: needs_data of every closed-seal answer goes to the log (devtest.needsDataLine). The hook is the
     -- controller's own step for data asks (Controller:_data_ask, every usable "open" answer, sync and async paths);
-    -- the original is kept once, so a second install does not log twice
+    -- the original is kept once, so a second install does not log twice. The log line is under pcall: a failure of
+    -- the dev log must not turn the answer into the failure phrase
     local okc, Controller = pcall(require, "riddle.controller")
     if okc and type(Controller._data_ask) == "function" then
         local dataAsk = Controller._devtest_data_ask or Controller._data_ask
         Controller._devtest_data_ask = dataAsk
         function Controller:_data_ask(job, result, reply)
-            local line = devtest.needsDataLine(job, result)
-            if line then logger.info(line) end
+            pcall(function()
+                local line = devtest.needsDataLine(job, result)
+                if line then logger.info(line) end
+            end)
             return dataAsk(self, job, result, reply)
         end
     else

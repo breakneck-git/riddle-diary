@@ -21,6 +21,22 @@ if [ -n "$1" ]; then DEV=1; fi
 PLUG=plugin/riddlediary.koplugin
 DEST=/mnt/us/koreader/plugins/riddlediary.koplugin
 for f in $PLUG/*.lua $PLUG/riddle/*.lua; do luajit -b "$f" /dev/null; done
+# dev only: the devtest sample sets (DEVSETS, default tools/devsets) are checked before the device is touched.
+# A set's name goes into a remote command: [A-Za-z0-9_-] only, the rule of devtest.parseFeed. A set without PNG
+# would fail scp after the plugin copy and devmode
+DEVSETS=${DEVSETS:-tools/devsets}
+if [ "$DEV" = 1 ]; then
+  for d in "$DEVSETS"/*/; do
+    [ -d "$d" ] || continue
+    name=$(basename "$d")
+    case $name in
+      ''|*[!A-Za-z0-9_-]*) echo "deploy: bad devset name: $name (A-Za-z0-9_- only), nothing deployed" >&2; exit 1 ;;
+    esac
+    found=0
+    for p in "$d"*.png; do [ -e "$p" ] && found=1; done
+    if [ "$found" = 0 ]; then echo "deploy: devset $name has no PNG ($d), nothing deployed" >&2; exit 1; fi
+  done
+fi
 ssh kindle "mkdir -p /mnt/us/riddle/samples $DEST"
 ssh kindle "touch /mnt/us/riddle/watch"
 if [ "$DEV" = 1 ]; then ssh kindle "touch /mnt/us/riddle/devmode"; else ssh kindle "rm -f /mnt/us/riddle/devmode"; fi
@@ -31,10 +47,11 @@ VER=$(git describe --always --dirty)
 printf '%s\n' "$VER" | ssh kindle "cat >$DEST/version"
 # syntax check with the device's own LuaJIT
 ssh kindle "cd /mnt/us/koreader && for f in plugins/riddlediary.koplugin/*.lua plugins/riddlediary.koplugin/riddle/*.lua; do ./luajit -b \"\$f\" /dev/null || exit 1; done"
-# dev only: sample sets for devtest "feed=N set=<name>": tools/devsets/<name>/*.png -> /mnt/us/riddle/devsamples/<name>/.
-# The set's old PNGs go first (a renamed sample must not stay in the round); the owner's diary gets none
+# dev only: sample sets for devtest "feed=N set=<name>": $DEVSETS/<name>/*.png -> /mnt/us/riddle/devsamples/<name>/
+# (names and PNG checked above). The set's old PNGs go first (a renamed sample must not stay in the round); the
+# owner's diary gets none
 if [ "$DEV" = 1 ]; then
-  for d in tools/devsets/*/; do
+  for d in "$DEVSETS"/*/; do
     [ -d "$d" ] || continue
     name=$(basename "$d")
     ssh kindle "mkdir -p /mnt/us/riddle/devsamples/$name/ && rm -f /mnt/us/riddle/devsamples/$name/*.png"

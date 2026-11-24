@@ -215,6 +215,21 @@ function T.test_log_keeps_key_hint()
   t.eq(#lines("riddle: needs_data=true"), 1, table.concat(log, "\n"))
 end
 
+-- сбой dev-лога не роняет ответ: страница получает ответ модели, не фразу сбоя
+function T.test_log_failure_keeps_answer()
+  local logger = require("logger")
+  local info = logger.info
+  logger.info = function(...)
+    if tostring(...):find("needs_data", 1, true) then error("log down") end
+    return info(...)
+  end
+  local env = ctl(stand.key())
+  local ok, text = pcall(env.page, env, true)
+  logger.info = info
+  t.ok(ok, tostring(text))
+  t.eq(text, REPLY)
+end
+
 -- install дважды (повторный запуск харнеса в процессе) — строка всё равно одна
 function T.test_install_twice_logs_once()
   devtest.install({}, { rssKB = function() return 0 end, RIDDLE_DIR = DIR })

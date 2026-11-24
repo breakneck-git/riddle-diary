@@ -208,4 +208,46 @@ function T.test_dev_deploy_copies_devsets_before_restart()
   end
 end
 
+-- наборы проверяются до первого обращения к устройству: имя — только [A-Za-z0-9_-] (то же правило, что
+-- devtest.parseFeed), иначе оно уходит в удалённую команду (пробел — rm вне набора, «;» — чужая команда);
+-- набор без PNG — тоже отказ (иначе scp с нераскрытым glob падал бы после копии плагина и touch devmode).
+-- DEVSETS — каталог наборов вместо tools/devsets
+local function devsets(dirs)
+  local root = io.popen("mktemp -d"):read("*l")
+  for name, png in pairs(dirs) do
+    os.execute(string.format("mkdir -p '%s/%s'", root, name)) -- одинарные: «$» в имени не раскрывается
+    if png then io.open(string.format("%s/%s/01_a.png", root, name), "wb"):close() end
+  end
+  return root
+end
+
+function T.test_bad_devset_name_stops_before_device()
+  for _, bad in ipairs({ "a b", "x;y", "a$b" }) do
+    local root = devsets({ ok = true, [bad] = true })
+    local out, rc, log = deploy("--dev", "DEVSETS=" .. root)
+    os.execute('rm -r "' .. root .. '"')
+    t.ok(rc ~= 0, "«" .. bad .. "»: ненулевой выход:\n" .. out)
+    t.ok(out:find("bad devset name", 1, true), out)
+    t.eq(log, "", "«" .. bad .. "»: до устройства не дошло ничего:\n" .. log)
+  end
+end
+
+function T.test_devset_without_png_stops_before_device()
+  local root = devsets({ ok = true, empty = false })
+  local out, rc, log = deploy("--dev", "DEVSETS=" .. root)
+  os.execute('rm -r "' .. root .. '"')
+  t.ok(rc ~= 0, out)
+  t.ok(out:find("devset empty has no PNG", 1, true), out)
+  t.eq(log, "", "до устройства не дошло ничего:\n" .. log)
+end
+
+-- плохой набор рабочему деплою не мешает: без --dev наборы не читаются
+function T.test_default_deploy_ignores_bad_devsets()
+  local root = devsets({ ["a b"] = true, empty = false })
+  local out, rc, log = deploy(nil, "DEVSETS=" .. root)
+  os.execute('rm -r "' .. root .. '"')
+  t.eq(rc, 0, out)
+  t.ok(not log:find("devsamples", 1, true), log)
+end
+
 t.run(T)
