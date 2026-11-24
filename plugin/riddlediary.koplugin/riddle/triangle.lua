@@ -63,10 +63,7 @@ local function shape(list, jump)
   if not c then return MISS end
   c[#c] = nil
   local n = #c
-  local x0, y0, x1, y1 = math.huge, math.huge, -math.huge, -math.huge
-  for _, q in ipairs(c) do
-    x0, y0, x1, y1 = math.min(x0, q[1]), math.min(y0, q[2]), math.max(x1, q[1]), math.max(y1, q[2])
-  end
+  local x0, y0, x1, y1 = pen.bounds(c)
   local parts = {
     gap = math.max((gap / perimeter) / triangle.GAP, (jump / perimeter) / triangle.JUMP),
     trim = trimmed / triangle.TRIM,

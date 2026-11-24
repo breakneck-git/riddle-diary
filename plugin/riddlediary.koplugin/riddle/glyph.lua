@@ -15,8 +15,8 @@ local glyph = {}
 glyph.N = 64            -- точек в облаке
 glyph.MAX_STROKES = 4   -- штрихов в знаке не больше: страница со словами не сравнивается
 glyph.SIZE = triangle.SIZE -- меньшая сторона рамки знака, px ≥: та же, что у треугольника
--- допуск cloud: свои пары фикстур — до 2.670 (owner_10), чужие после ворот — от 3.312 (letter_ef против
--- образца-треугольника в два штриха)
+-- допуск cloud: свои пары фикстур в тестах — до 2.222, с образцом из одного рисунка — до 3.470; чужие после
+-- ворот — от 3.312 (letter_ef против образца-треугольника в два штриха)
 glyph.DIST = 3.0
 
 -- список точек меньше другого: первая разная координата, потом длина
@@ -67,12 +67,9 @@ local function cloud_of(strokes)
     end
   end
   local cx, cy = 0, 0
-  local x0, y0, x1, y1 = math.huge, math.huge, -math.huge, -math.huge
-  for _, q in ipairs(pts) do
-    cx, cy = cx + q[1], cy + q[2]
-    x0, y0, x1, y1 = math.min(x0, q[1]), math.min(y0, q[2]), math.max(x1, q[1]), math.max(y1, q[2])
-  end
+  for _, q in ipairs(pts) do cx, cy = cx + q[1], cy + q[2] end
   cx, cy = cx / #pts, cy / #pts
+  local x0, y0, x1, y1 = pen.bounds(pts)
   local side = math.max(x1 - x0, y1 - y0)
   local out = {}
   for i, q in ipairs(pts) do out[i] = { (q[1] - cx) / side, (q[2] - cy) / side } end
@@ -111,12 +108,11 @@ end
 
 -- рисунок -> меньшая сторона его рамки, px (0 — точек нет)
 local function side(strokes)
-  local x0, y0, x1, y1 = math.huge, math.huge, -math.huge, -math.huge
+  local all = {}
   for _, s in ipairs(strokes) do
-    for _, q in ipairs(pen.points(s)) do
-      x0, y0, x1, y1 = math.min(x0, q[1]), math.min(y0, q[2]), math.max(x1, q[1]), math.max(y1, q[2])
-    end
+    for _, q in ipairs(pen.points(s)) do all[#all + 1] = q end
   end
+  local x0, y0, x1, y1 = pen.bounds(all)
   return x0 == math.huge and 0 or math.min(x1 - x0, y1 - y0)
 end
 

@@ -40,6 +40,16 @@ function pen.joins(a, b)
   return out
 end
 
+-- рамка точек: x0, y0, x1, y1 — наименьшие и наибольшие x и y; у пустого списка — math.huge, math.huge,
+-- -math.huge, -math.huge (рамки нет)
+function pen.bounds(list)
+  local x0, y0, x1, y1 = math.huge, math.huge, -math.huge, -math.huge
+  for _, q in ipairs(list) do
+    x0, y0, x1, y1 = math.min(x0, q[1]), math.min(y0, q[2]), math.max(x1, q[1]), math.max(y1, q[2])
+  end
+  return x0, y0, x1, y1
+end
+
 -- ломаная -> n точек через равные отрезки длины | nil (длина нулевая)
 function pen.resample(list, n)
   local total = pen.length(list)

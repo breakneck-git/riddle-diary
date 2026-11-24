@@ -16,6 +16,18 @@ function T.test_points_pairs_flat_list()
   t.eq(#pen.points({}), 0, "штрих без p")
 end
 
+function T.test_bounds_box_of_points()
+  local x0, y0, x1, y1 = pen.bounds({ { 3, -1 }, { -2, 4 }, { 5, 2 } })
+  t.eq(x0, -2) t.eq(y0, -1) t.eq(x1, 5) t.eq(y1, 4)
+  x0, y0, x1, y1 = pen.bounds({ { 7, 9 } })
+  t.eq(x0, 7) t.eq(y0, 9) t.eq(x1, 7) t.eq(y1, 9)
+end
+
+function T.test_bounds_empty_has_no_box()
+  local x0, y0, x1, y1 = pen.bounds({})
+  t.eq(x0, math.huge) t.eq(y0, math.huge) t.eq(x1, -math.huge) t.eq(y1, -math.huge)
+end
+
 function T.test_dist()
   near(pen.dist({ 0, 0 }, { 3, 4 }), 5)
 end
