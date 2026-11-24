@@ -80,11 +80,18 @@ local PERSONA = "\n" .. [[Характер: холодный расчёт под
   " " .. SELF_GENDER.m .. " " .. NO_GENDER .. "\n" .. VOICE .. " Отвечай по-русски, коротко: " .. SHAPE .. " " ..
   DIALOG .. " " .. no_repeat(", вроде партии и хода,") .. " " .. TRUTH
 
+-- персонажа нет (persona.NONE_VIEW): дневник без образа пишет на языке записи, о себе без рода
+local NONE_LANG = "на языке записи"
+prompt.NONE_PERSONA = "Ты — дневник без имени и без истории: образа у тебя нет, ты просто отвечаешь тому, кто в " ..
+  "тебе пишет."
+
 -- сгенерированная персона: view = { head, body, lang, lang_name?, gender } (riddle.persona.view). Голова и тело —
--- её, правила формы, памяти и правды — общие
+-- её, правила формы, памяти и правды — общие. Персонажа нет (view.none: закрытая печать без базы — строку конфига не
+-- прочесть) — голова NONE_PERSONA, без тела, на языке записи, о себе без рода; правила те же
 local function generated_persona(view)
-  local lang = "Отвечай " .. lang_phrase(view) .. ", коротко: "
-  return "Ты — " .. view.head .. "\n" .. view.body .. " " ..
+  local lang = "Отвечай " .. (view.none and NONE_LANG or lang_phrase(view)) .. ", коротко: "
+  local who = view.none and prompt.NONE_PERSONA or "Ты — " .. view.head .. "\n" .. view.body
+  return who .. " " ..
     (SELF_GENDER[view.gender] or SELF_GENDER.n) .. " " .. NO_GENDER .. "\n" .. lang .. SHAPE .. " " .. DIALOG .. " " ..
     no_repeat() .. " " .. TRUTH
 end
@@ -96,7 +103,7 @@ local METHODS_STYLE = { lang = "по-русски", about = "о себе в му
 
 local function self_style(view)
   if view == nil or view.builtin then return METHODS_STYLE end
-  if view.none then return { lang = "на языке записи", about = "о себе без рода", say_lang = true } end
+  if view.none then return { lang = NONE_LANG, about = "о себе без рода", say_lang = true } end
   return { name = view.kind, lang = lang_phrase(view), say_lang = true,
     about = "о себе " .. (GENDER_FORM[view.gender] or "без рода") }
 end
@@ -403,7 +410,7 @@ local fit_mode_labels = setmetatable({}, { __mode = "k" })
 
 function prompt.open(png_b64, ctx)
   ctx = ctx or {}
-  -- ctx.persona: нет или встроенная («Методов») — прежний текст; иначе сгенерированная
+  -- ctx.persona: нет или встроенная («Методов») — прежний текст; иначе сгенерированная или persona.NONE_VIEW
   local p = ctx.persona
   local persona_text = (p and not p.builtin) and generated_persona(p) or PERSONA_HEAD .. PERSONA
   local parts = { persona_text }

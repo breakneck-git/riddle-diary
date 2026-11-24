@@ -157,14 +157,23 @@ function T.test_closed_seal_log_names_answering_provider()
   t.ok(logged(env, 'riddle: open read "кто ты"') and logged(env, "via gemini"), table.concat(env.logs, "\n"))
 end
 
--- закрытая печать без базы и строка конфига не «Методов» (ревью ui 4527af2): персону взять негде, но данные при
--- закрытой не нужны — модель отвечает без персоны, а не падает на memory:persona_by_key
+-- закрытая печать без базы и строка конфига не «Методов» (ревью ui 4527af2, 97c6697): персону взять негде, но данные
+-- при закрытой не нужны — модель отвечает нейтрально (persona.NONE_VIEW), не голосом «Методов» и не фразой сбоя
 function T.test_closed_seal_without_memory_answers_for_config_line()
+  local prompt = require("riddle.prompt")
   local env = make({ gemini_key = "km", seal = stand.key(), whose = "Hermione Granger" })
   env.script[1] = { body = resp({ read = "кто ты", reply = "Страницы закрыты." }) }
   t.eq(env.ctrl:on_page(PNG), "Страницы закрыты.")
   t.eq(#env.posts, 1, "модель вызвана")
   t.ok(not logged(env, "on_page failed"), table.concat(env.logs, "\n"))
+  local first = json.decode(env.posts[1].body).messages[1]
+  t.eq(first.role, "system")
+  local system = first.content
+  for _, word in ipairs({ "Волдеморт", "Реддл" }) do
+    t.ok(not system:find(word, 1, true), "голос «Методов» в system: " .. word)
+  end
+  t.ok(system:find(prompt.NONE_PERSONA, 1, true), "нейтральный вид (NONE_VIEW) в system")
+  t.ok(system:find(prompt.SEAL_CLOSED, 1, true), "правило закрытой печати")
 end
 
 -- devmode доходит до контроллера через app.new_controller: без него текст read в лог не идёт

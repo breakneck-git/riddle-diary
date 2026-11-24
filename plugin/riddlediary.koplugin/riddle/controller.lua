@@ -815,8 +815,8 @@ function Controller:_begin(png_path, with_run)
   local png_b64, fail = self:_page_b64(png_path)
   if not png_b64 then return nil, fail end
   local ok
-  -- персона: страница снимает паузу генерации; хранилища нет — фраза сбоя (не Волдеморт: строка просит другого
-  -- персонажа). Голосом персонажа — когда есть и персона, и мир (persona.ready); раньше страница читается без образа
+  -- персона: страница снимает паузу генерации; хранилища нет — фраза сбоя, а при закрытой печати нейтральный ответ
+  -- (не Волдеморт: строка просит другого персонажа). Голосом персонажа — когда есть и персона, и мир (persona.ready); раньше страница читается без образа
   -- (prompt.setup, setup = true) и ложится в память нового персонажа
   -- Закрытая печать — тот же путь (spec §4): персона, вопрос о строке и генерация данных пользователя не читают
   local view, parts, setup, ask, row
@@ -824,10 +824,12 @@ function Controller:_begin(png_path, with_run)
   -- строки нет: страница — ответ на «Чей это дневник?» (читается без образа и без памяти, _ask_answer)
   if self.saved_ask and self.saved_ask.failed then self.saved_ask = nil end -- сбой чтения — перечитать
   local asking = self:_asking()
-  -- база не открылась (main.lua), а строка не «Методов»: персону взять негде. Закрытой печати она не нужна — ответ
-  -- без персоны (prompt.open: прежний текст), без записи; открытой нужна память (фраза сбоя в pcall ниже)
-  local bare = not deps.memory and not self:_data_ok() and not self:_builtin()
-  if not (asking or bare) then
+  if not asking and not deps.memory and not self:_data_ok() and not self:_builtin() then
+    -- база не открылась (main.lua), а строка не «Методов»: персону взять негде. Закрытой печати она не нужна — ответ
+    -- нейтральный (persona.NONE_VIEW: без персонажа, на языке записи), без данных и без записи. Открытой нужна
+    -- память — она идёт в _current ниже и получает фразу сбоя
+    view = persona.NONE_VIEW
+  elseif not asking then
     ok, view, row, parts = pcall(self._current, self)
     if not ok then
       self:_log("riddle: on_page failed: " .. tostring(view))
@@ -870,7 +872,8 @@ function Controller:_begin(png_path, with_run)
     -- закрытая печать — тот же ответ без данных: их не отдаёт _open_context (spec §4)
     local data = self:_data_ok()
     if data and self.followup_due then pcall(self._sync_lore, self) end -- лор — к ответам до начала хвоста
-    -- база не открылась: закрытая печать отвечает и без неё (bare выше), сессии нет; открытой нужна память
+    -- база не открылась: закрытая печать отвечает и без неё (нейтрально — NONE_VIEW выше, у «Методов» — её голосом),
+    -- сессии нет; открытой нужна память
     local sid = deps.memory and deps.memory:session(deps.now())
     local t0 = deps.clock and deps.clock()
     local ctx, tasks_ctx = self:_open_context(sid, parts)
