@@ -4,7 +4,8 @@
 # Every deploy sets /mnt/us/riddle/watch (the restart watcher is on at the next KOReader start, debug stays off).
 # By default devmode is REMOVED before the restart: the new process runs without the devtest harness and
 # without the verbose read log. --dev (or a testmode string, which only devtest understands) creates
-# /mnt/us/riddle/devmode instead: watcher plus debug.
+# /mnt/us/riddle/devmode instead: watcher plus debug, and the devtest sample sets of tools/devsets/ go to
+# /mnt/us/riddle/devsamples/<set>/ (devtest "feed=N set=<set>").
 #
 # Copies the whole plugin including riddle/. Syntax is checked locally before the copy
 # and with the device's own LuaJIT after it; a failure stops before the restart.
@@ -30,6 +31,16 @@ VER=$(git describe --always --dirty)
 printf '%s\n' "$VER" | ssh kindle "cat >$DEST/version"
 # syntax check with the device's own LuaJIT
 ssh kindle "cd /mnt/us/koreader && for f in plugins/riddlediary.koplugin/*.lua plugins/riddlediary.koplugin/riddle/*.lua; do ./luajit -b \"\$f\" /dev/null || exit 1; done"
+# dev only: sample sets for devtest "feed=N set=<name>": tools/devsets/<name>/*.png -> /mnt/us/riddle/devsamples/<name>/.
+# The set's old PNGs go first (a renamed sample must not stay in the round); the owner's diary gets none
+if [ "$DEV" = 1 ]; then
+  for d in tools/devsets/*/; do
+    [ -d "$d" ] || continue
+    name=$(basename "$d")
+    ssh kindle "mkdir -p /mnt/us/riddle/devsamples/$name/ && rm -f /mnt/us/riddle/devsamples/$name/*.png"
+    scp -q "$d"*.png "kindle:/mnt/us/riddle/devsamples/$name/"
+  done
+fi
 if [ -n "$1" ]; then ssh kindle "echo '$1' >/mnt/us/riddle/testmode"; fi
 # KOReader runs: ask the plugin's watcher to restart and wait until the device log confirms it
 # ("riddle: dev restart requested"). A lone touch proves nothing: a deploy that lands while KOReader is

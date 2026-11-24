@@ -1,0 +1,83 @@
+[
+ {
+  "file": "01_chto_ya_pisal_vchera.png",
+  "text": "Что я писал вчера?",
+  "bad": false,
+  "size": [
+   758,
+   150
+  ]
+ },
+ {
+  "file": "02_napomni_moi_zadachi_na_n.png",
+  "text": "Напомни мои задачи на неделю",
+  "bad": false,
+  "size": [
+   758,
+   226
+  ]
+ },
+ {
+  "file": "03_chto_ya_tebe_rasskazyval.png",
+  "text": "Что я тебе рассказывал про сестру?",
+  "bad": false,
+  "size": [
+   758,
+   226
+  ]
+ },
+ {
+  "file": "04_o_chem_my_govorili_v_pro.png",
+  "text": "О чём мы говорили в прошлый раз?",
+  "bad": false,
+  "size": [
+   758,
+   226
+  ]
+ },
+ {
+  "file": "05_pokazhi_moi_starye_zapis.png",
+  "text": "Покажи мои старые записи",
+  "bad": false,
+  "size": [
+   758,
+   226
+  ]
+ },
+ {
+  "file": "06_skolko_raz_ya_pisal_pro.png",
+  "text": "Сколько раз я писал про работу?",
+  "bad": false,
+  "size": [
+   758,
+   226
+  ]
+ },
+ {
+  "file": "07_menya_zovut_tester_zapom.png",
+  "text": "Меня зовут Тестер, запомни",
+  "bad": false,
+  "size": [
+   758,
+   226
+  ]
+ },
+ {
+  "file": "08_kakaya_segodnya_pogoda_v.png",
+  "text": "Какая сегодня погода в лесу?",
+  "bad": false,
+  "size": [
+   758,
+   226
+  ]
+ },
+ {
+  "file": "09_rasskazhi_zagadku_pro_lu.png",
+  "text": "Расскажи загадку про луну",
+  "bad": false,
+  "size": [
+   758,
+   226
+  ]
+ }
+]

@@ -12,7 +12,9 @@
 -- Без экрана: "feed=N gap=S full=1 new=1 offline=dns|tcp" — N образцов devsamples (или full=1:
 -- синтетика на всю страницу, отрисованная только в PNG) идут прямо в controller:on_page раз в
 -- gap с; на экране ничего не рисуется и не меняется, приглашение остаётся. В конце печать
--- закрывается. Строки "riddle: FEED ..." и сводка p50/p90.
+-- закрывается. Строки "riddle: FEED ..." и сводка p50/p90. set=<имя> — образцы из devsamples/<имя>/ (набор кладёт
+-- tools/deploy.sh --dev из tools/devsets/<имя>/), без set — PNG корня devsamples.
+-- Во всём devmode на каждый ответ закрытой печати — строка "riddle: needs_data=<true|false>" (без текста записи).
 --
 -- Карта без пальца: "rose=N" — N раз подряд роза ветров пером на странице (через feedEvent, как живой палец) →
 -- ждём открытия карты → через 5 с роза на пергаменте → ждём закрытия → пауза. Печать должна быть открыта (иначе
@@ -90,6 +92,28 @@ end
 local function percentile(sorted, q)
     if #sorted == 0 then return -1 end
     return sorted[math.max(1, math.ceil(#sorted * q))]
+end
+
+-- "feed=N gap=S full=1 new=1 set=NAME" in the testmode string -> { n, gap, full, new, set, bad_set } | nil (no feed=).
+-- set — подкаталог devsamples/<NAME>/ с набором образцов; без set — PNG корня devsamples, как раньше. Имя — только
+-- [%w_-]: путь вне devsamples не собирается; иное — bad_set = как написано, feed не начинается
+function devtest.parseFeed(s)
+    local n = tonumber(s:match("feed=(%d+)"))
+    if not n then return nil end
+    local o = { n = n, gap = tonumber(s:match("gap=([%d.]+)")) or 8, full = s:match("full=1") ~= nil,
+                new = s:match("new=1") ~= nil }
+    local set = s:match("set=(%S*)")
+    if set then
+        if set:match("^[%w_%-]+$") then o.set = set else o.bad_set = set end
+    end
+    return o
+end
+
+-- needs_data ответа на запрос закрытой печати (job.closed: правило needs_data было только в нём) -> строка dev-лога |
+-- nil (открытая печать). Только флаг: ни текста записи, ни ответа
+function devtest.needsDataLine(job, result)
+    if not (job and job.closed) then return nil end
+    return "riddle: needs_data=" .. tostring(type(result) == "table" and result.needs_data == true)
 end
 
 -- "rose=N" in the testmode string -> N | nil
@@ -228,6 +252,22 @@ function devtest.install(Diary, h)
         return revealAnswer(self, text, top, unlocked, kind, ...)
     end
 
+    -- dev only: needs_data of every closed-seal answer goes to the log (devtest.needsDataLine). The hook is the
+    -- controller's own step for data asks (Controller:_data_ask, every usable "open" answer, sync and async paths);
+    -- the original is kept once, so a second install does not log twice
+    local okc, Controller = pcall(require, "riddle.controller")
+    if okc and type(Controller._data_ask) == "function" then
+        local dataAsk = Controller._devtest_data_ask or Controller._data_ask
+        Controller._devtest_data_ask = dataAsk
+        function Controller:_data_ask(job, result, reply)
+            local line = devtest.needsDataLine(job, result)
+            if line then logger.info(line) end
+            return dataAsk(self, job, result, reply)
+        end
+    else
+        logger.warn("riddle: devtest needs_data log off:", okc and "no Controller._data_ask" or Controller)
+    end
+
     -- samples=1: the page's PNG is replaced by the next devsample before it goes to the controller
     local saveSample = Diary.saveSample
     function Diary:saveSample(pg)
@@ -280,7 +320,7 @@ function devtest.install(Diary, h)
         local s = f:read("*a") or ""
         f:close()
         os.remove(RIDDLE_DIR .. "/testmode")
-        if s:match("feed=%d+") then
+        if devtest.parseFeed(s) then
             self:testFeed(s)
             return
         end
@@ -458,20 +498,24 @@ function devtest.install(Diary, h)
             logger.warn("riddle: FEED no controller")
             return
         end
+        local o = devtest.parseFeed(s)
+        if o.bad_set then
+            logger.warn("riddle: FEED bad set=" .. o.bad_set .. " (letters, digits, _ and - only): not started")
+            return
+        end
         devtest.simulateOffline(s)
-        local n = tonumber(s:match("feed=(%d+)")) or 1
-        local gap = tonumber(s:match("gap=([%d.]+)")) or 8
-        local full = s:match("full=1") ~= nil
-        if s:match("new=1") then
+        local n, gap, full = o.n, o.gap, o.full
+        if o.new then
             -- штатный разрыв сессии — пауза больше memory.lua SESSION_GAP_S (4 ч): спрашиваем у памяти
             -- «сейчас» на 5 ч вперёд, она заводит сессию; реплики потом пишутся с настоящим временем
             ctl.deps.memory:session(ctl.deps.now() + 5 * 3600)
         end
-        local files = listSamples(RIDDLE_DIR .. "/devsamples")
+        local dir = RIDDLE_DIR .. "/devsamples" .. (o.set and "/" .. o.set or "")
+        local files = listSamples(dir)
         local times, i = {}, 0
         local rss0 = rssKB()
-        logger.info(string.format("riddle: FEED start n=%d gap=%s full=%s samples=%d RSS KB %d", n, gap,
-            tostring(full), #files, rss0))
+        logger.info(string.format("riddle: FEED start n=%d gap=%s full=%s set=%s samples=%d RSS KB %d", n, gap,
+            tostring(full), o.set or "-", #files, rss0))
         local function one()
             if self.cur then -- a real finger is writing: never block under it
                 self:schedule(1, one)
@@ -505,7 +549,7 @@ function devtest.install(Diary, h)
             elseif #files > 0 then
                 local name = files[(i - 1) % #files + 1]
                 path = string.format("%s/samples/feed-%03d.png", RIDDLE_DIR, i)
-                local size = copyFile(RIDDLE_DIR .. "/devsamples/" .. name, path)
+                local size = copyFile(dir .. "/" .. name, path)
                 what = string.format("%s %s bytes", name, tostring(size))
             end
             if not path then

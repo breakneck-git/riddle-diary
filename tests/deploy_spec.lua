@@ -182,4 +182,30 @@ function T.test_dev_deploy_keeps_devmode()
   end
 end
 
+-- наборы образцов devtest (feed=N set=<имя>): tools/devsets/<имя>/*.png -> /mnt/us/riddle/devsamples/<имя>/, только при
+-- --dev или testmode, до перезапуска; старые PNG набора на устройстве убираются до копии. Рабочий дневник их не получает
+local SET_DIR = "/mnt/us/riddle/devsamples/data/"
+
+function T.test_default_deploy_copies_no_devsets()
+  local out, rc, log = deploy()
+  t.eq(rc, 0, out)
+  t.ok(not log:find("devsamples", 1, true), "рабочий дневник получил образцы:\n" .. log)
+end
+
+function T.test_dev_deploy_copies_devsets_before_restart()
+  for _, args in ipairs({ "--dev", "'feed=9 gap=60 set=data'" }) do
+    local out, rc, log = deploy(args)
+    t.eq(rc, 0, out)
+    local clean = line_of(log, "mkdir -p " .. SET_DIR .. " && rm -f " .. SET_DIR .. "*.png")
+    local copy = line_of(log, "tools/devsets/data/01_chto_ya_pisal_vchera.png")
+    local r = line_of(log, "touch /mnt/us/riddle/restart")
+    t.ok(clean > 0 and clean < copy and copy < r, args .. ": очистка, копия, потом restart:\n" .. log)
+    local scp
+    for l in log:gmatch("[^\n]+") do if l:find("tools/devsets/data/", 1, true) then scp = l end end
+    t.ok(scp:find("kindle:" .. SET_DIR, 1, true), "цель — каталог набора:\n" .. scp)
+    t.ok(scp:find("09_rasskazhi_zagadku_pro_lu.png", 1, true), "все PNG набора:\n" .. scp)
+    t.ok(not scp:find("samples.json", 1, true), "только PNG:\n" .. scp)
+  end
+end
+
 t.run(T)
