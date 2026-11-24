@@ -1075,6 +1075,17 @@ function T.test_answer_postpones_idle()
   t.eq(env.ctrl:seal_left(2000 + 1800), nil, "закрытой отсчитывать нечего")
 end
 
+-- Review Focus 3 у контроллера: часы ушли назад — отсчёт заново от «сейчас»; вопрос seal_left видит тот же
+-- отсчёт, что seal_check (одна точка сброса)
+function T.test_seal_left_counts_anew_after_clock_back()
+  local env = make({ seal = { key = true, minutes = 30 } })
+  env:unlock() -- в 1000
+  t.eq(env.ctrl:seal_left(500), 1800, "часы назад — полный срок")
+  t.eq(env.ctrl:seal_left(500 + 1700), 100, "отсчёт от 500, не от 1000")
+  t.eq(env.ctrl:seal_check(500 + 1799), false)
+  t.eq(env.ctrl:seal_check(500 + 1800), true, "закрыта по новому отсчёту")
+end
+
 -- Review Focus 1, таймер: страница начата при открытой печати, простой закрыл её, пока ответ в пути, — ответ не
 -- показывается и простой не отодвигает: печать остаётся закрытой
 function T.test_timer_closes_and_drops_in_flight()

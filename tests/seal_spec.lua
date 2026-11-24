@@ -69,6 +69,16 @@ function T.test_due_clock_back()
   t.eq(s:due(500 + 1800), true)
 end
 
+-- left — только вопрос: часы назад он считает от «сейчас», но печать не трогает — следующий вопрос при прежних часах
+-- считает от прежней записи (сброс отсчёта — дело due и touch)
+function T.test_left_is_a_question()
+  local s = new_seal({ key = true, minutes = 30 })
+  s:unlock(1000)
+  t.eq(s:left(500), 1800, "часы назад — полный срок")
+  t.eq(s:left(500), 1800, "повтор — тот же ответ")
+  t.eq(s:left(1000), 1800, "часы вернулись — отсчёт от записи в 1000")
+end
+
 -- закрытой печати, печати без minutes и печати без правил закрывать по простою нечего
 function T.test_due_needs_minutes_and_open()
   local closed = new_seal({ key = true, minutes = 30 })

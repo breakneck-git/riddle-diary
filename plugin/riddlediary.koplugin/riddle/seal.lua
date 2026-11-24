@@ -147,17 +147,22 @@ function Seal:touch(now)
 end
 
 -- секунды до закрытия по простою (правило minutes, spec §6) | nil: закрывать по времени нечего (правила нет, печать
--- закрыта, записи не было). Часы ушли назад (now < last_at; NTP, ручная правка — Review Focus 3): отсчёт заново от
--- now — раньше срока печать не закроется
+-- закрыта, записи не было). Часы ушли назад (now < last_at; NTP, ручная правка — Review Focus 3): отсчёт от now —
+-- раньше срока печать не закроется. Только вопрос: печать не меняет, сброс запоминает clock
 function Seal:left(now)
   local minutes = self.rules.minutes
   if not (minutes and self.open and self.last_at) then return nil end
-  if now < self.last_at then self.last_at = now end
-  return self.last_at + minutes * 60 - now
+  return math.min(self.last_at, now) + minutes * 60 - now
+end
+
+-- сверить часы: ушли назад (now < last_at) — отсчёт заново от now. Зовут due и Controller:seal_left
+function Seal:clock(now)
+  if self.last_at and now < self.last_at then self.last_at = now end
 end
 
 -- простой истёк — пора закрыть
 function Seal:due(now)
+  self:clock(now)
   local left = self:left(now)
   return left ~= nil and left <= 0
 end

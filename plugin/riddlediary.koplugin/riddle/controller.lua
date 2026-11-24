@@ -1155,9 +1155,13 @@ function Controller:seal_check(now)
   return self:_close("idle")
 end
 
--- секунды до закрытия по простою | nil: по времени не закроется (виджет взводит по ним таймер)
+-- секунды до закрытия по простою | nil: по времени не закроется (виджет взводит по ним таймер). Часы ушли назад —
+-- отсчёт заново (Seal:clock), как у seal_check. Печать не закрывает: истёкший срок — 0 и меньше, таймер виджета
+-- сработает сразу и сам закроет её и уберёт экран открытой печати
 function Controller:seal_left(now)
-  return self.seal:left(now or self.deps.now())
+  now = now or self.deps.now()
+  self.seal:clock(now)
+  return self.seal:left(now)
 end
 
 -- ключ узнан (задача 6): закрытую печать открывает приветствием, открытую закрывает фразой texts.seal_closed.
