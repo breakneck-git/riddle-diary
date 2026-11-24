@@ -1,7 +1,6 @@
--- Загрузка /mnt/us/riddle/config.lua (ключи, заветное слово и подсказки печати; в git не лежат).
+-- Загрузка /mnt/us/riddle/config.lua (ключи и правила печати; в git не лежат).
 -- Нет файла или он битый → конфиг без ключей: дневник тогда отвечает только «сонными» фразами.
--- Заветное слово и подсказки хранятся только в config.lua на устройстве; здесь их нет
--- (без слова печать не открыть, без подсказок неудача — просто отказ).
+-- Печать — таблица seal (spec 2026-11-20 §3): правила, а не слово; образец ключа пишет дневник, не конфиг.
 
 local str = require("riddle.str")
 
@@ -18,14 +17,6 @@ local function clean_key(v)
   v = str.trim(v)
   if v == "" or PLACEHOLDERS[v] then return nil end
   return v
-end
-
-local function valid_variants(v)
-  if type(v) ~= "table" or #v == 0 then return false end
-  for _, s in ipairs(v) do
-    if type(s) ~= "string" or s == "" then return false end
-  end
-  return true
 end
 
 -- непустая строка без пробелов по краям или nil
@@ -70,20 +61,51 @@ local function clean_providers(list)
   return out
 end
 
--- слова нет (не битое): поля нет или список из одних пустых строк — печать необязательна
-local function no_variants(v)
-  if v == nil then return true end
-  if type(v) ~= "table" then return false end
-  for _, s in pairs(v) do
-    if s ~= "" then return false end
+local SEAL_FLAGS = { "key", "on_sleep", "remember", "off" }
+
+-- правила печати из raw.seal (spec §3). Всегда таблица:
+-- { on, key, minutes, on_sleep, remember, off, invalid }. on — печать есть: хоть одно правило и нет off.
+-- invalid — причина, по которой правила битые: печать тогда есть и закрыта (опечатка дневник не открывает);
+-- off побеждает всё, в том числе битые правила — это выход из битого конфига. Одно правило для устройства
+-- и для tools/push_config.sh: скрипт зовёт эту функцию, а не копию
+function config.parse_seal(raw)
+  local s = { on = false, key = false, on_sleep = false, remember = true, off = false }
+  if raw == nil then return s end
+  local invalid
+  if type(raw) ~= "table" then
+    invalid = "seal is not a table"
+  else
+    for _, f in ipairs(SEAL_FLAGS) do
+      local v = raw[f]
+      if v ~= nil and type(v) ~= "boolean" then
+        invalid = invalid or (f .. " is not a boolean")
+      elseif v ~= nil then
+        s[f] = v
+      end
+    end
+    local m = raw.minutes
+    if m ~= nil then
+      if type(m) == "number" and m >= 1 and m < math.huge and m == math.floor(m) then
+        s.minutes = m
+      else
+        invalid = invalid or "minutes is not an integer >= 1"
+      end
+    end
+    -- правило закрытия без ключа: закрыть можно, открыть нечем
+    if not s.key and (m ~= nil or s.on_sleep) then
+      invalid = invalid or "close rule without key"
+    end
   end
-  return true
+  if s.off then return s end
+  s.invalid = invalid
+  s.on = invalid ~= nil or s.key
+  return s
 end
 
 function config.load(path)
   path = path or config.DEFAULT_PATH
   local ok, raw = pcall(dofile, path)
-  -- файл есть, но не загрузился: что в нём было, неизвестно — печать закрыта (seal_invalid)
+  -- файл есть, но не загрузился: что в нём было, неизвестно — печать закрыта (cfg.seal.invalid)
   local broken = false
   if not ok or type(raw) ~= "table" then
     local f = io.open(path, "r")
@@ -132,29 +154,13 @@ function config.load(path)
   -- по нему дневник получает персону (riddle.persona). Нет — пока персона «Методов»
   cfg.whose = clean_str(raw.whose)
 
-  local hint_every = raw.hint_every
-  if type(hint_every) == "number" and hint_every >= 1 and hint_every == math.floor(hint_every) then
-    cfg.hint_every = hint_every
-  else
-    cfg.hint_every = 3
+  cfg.seal = config.parse_seal(raw.seal)
+  if broken then
+    cfg.seal.on = true
+    cfg.seal.invalid = "config file did not load"
   end
-
-  -- подсказки печати: непустые строки по порядку, остальное отброшено
-  cfg.hints = {}
-  if type(raw.hints) == "table" then
-    for _, s in ipairs(raw.hints) do
-      if type(s) == "string" and s ~= "" then cfg.hints[#cfg.hints + 1] = s end
-    end
-  end
-
-  if valid_variants(raw.password_variants) then
-    cfg.password_variants = {}
-    for i, s in ipairs(raw.password_variants) do cfg.password_variants[i] = s end
-  else
-    cfg.password_variants = {}
-    -- слово есть, но битое: печать закрыта (открыть нечем), а не «печати нет»
-    if broken or not no_variants(raw.password_variants) then cfg.seal_invalid = true end
-  end
+  -- старое слово (до графического ключа) не читается; флаг — для строки в логе
+  if raw.password_variants ~= nil then cfg.legacy_word = true end
   return cfg
 end
 

@@ -2,10 +2,10 @@
 # Пишет /mnt/us/riddle/config.lua на Kindle из ~/.envs. Значения не печатает.
 # Читает: GEMINI_API_KEY, GEMINI_API_KEY_*, GEMINI_API_KEYS (через запятую), GROQ_API_KEY, BEATAPI_API_KEY,
 # GEMINI_PROXY_URL и GEMINI_PROXY_AUTH_TOKEN (gemini-proxy — Cloudflare Worker rss_bot, первым в цепочке).
-# Слово и подсказки печати (password_variants, hints) — из файла печати RIDDLE_SEAL
-# (по умолчанию ~/.config/riddle-diary/seal.lua): поля таблицы Lua как в config.example.lua, вставляются как есть.
-# Печать необязательна: нет файла или в нём нет password_variants — конфиг без полей печати («печать: нет»),
-# дневник на устройстве открыт сразу. Файл есть, но битый — отказ, ничего не записывается.
+# Правила печати (таблица seal) — из файла печати RIDDLE_SEAL (по умолчанию ~/.config/riddle-diary/seal.lua):
+# поля таблицы Lua как в config.example.lua; в конфиг уходит только seal, разобранный config.parse_seal плагина.
+# Печать необязательна: нет файла или в нём нет seal — конфиг без печати («печать: нет»), дневник на устройстве
+# открыт сразу. Файл есть, но битый (не Lua, seal нарушает правила) — отказ, ничего не записывается.
 # Цепочка модели: gemini-proxy → Gemini → Groq → BeatAPI (deepseek-v4.1-flash-free, max_tokens 400); OpenRouter убран (2026-10-25).
 # GROQ_API_KEY, BEATAPI_API_KEY — запасные провайдеры: providers = { { name = "groq", …, after_legacy = true }, { name = "beatapi", … } }.
 # NOTION_DIARY_API — токен Notion в notion_token (знание дневника; один, без ключа модели конфиг не пишется).
@@ -159,34 +159,47 @@ echo "watched_values: Просмотрено, Прочитано, Брошено
 
 [ "$count" -gt 0 ] || { echo "ни одного ключа — ничего не записано" >&2; exit 1; }
 
-# слово и подсказки печати живут только в конфиге на устройстве (в плагине и здесь их нет).
+# правила печати живут только в конфиге на устройстве (образец ключа пишет дневник, не скрипт).
 # Нет файла печати — печати нет. Файл есть: до отправки проверяем (luajit читает stdin, его ошибки
-# с текстом файла не печатаются): таблица Lua; password_variants нет — печати нет, иначе непустой
-# список непустых строк (как valid_variants в config.lua); иначе битый конфиг оставил бы дневник без ключей
+# с текстом файла не печатаются) правилами плагина — config.parse_seal, не копией: таблица Lua; seal нет —
+# печати нет; seal битый — отказ (на устройстве печать была бы закрыта без выхода). В конфиг уходит seal,
+# собранный заново из разобранных полей: прочее содержимое файла (старое слово) на устройство не попадает
 seal_body=""
-# есть, но не читается — отказ: иначе слово молча пропало бы («печать: нет»)
+# есть, но не читается — отказ: иначе печать молча пропала бы («печать: нет»)
 if [ -e "$SEAL" ] && [ ! -r "$SEAL" ]; then
   echo "файл печати $SEAL не читается — ничего не записано" >&2; exit 1
 fi
+seal_state="нет"
 if [ -r "$SEAL" ]; then
   command -v luajit >/dev/null || { echo "нет luajit: файл печати не проверить — ничего не записано" >&2; exit 1; }
+  plugin="$(cd "$(dirname "$0")/.." && pwd)/plugin/riddlediary.koplugin"
   rc=0
-  { printf 'return {\n'; cat "$SEAL"; printf '\n}\n'; } | luajit -e 'local f = loadstring(io.read("*a"))
+  seal_body=$({ printf 'return {\n'; cat "$SEAL"; printf '\n}\n'; } | RIDDLE_PLUGIN="$plugin" luajit -e '
+package.path = os.getenv("RIDDLE_PLUGIN") .. "/?.lua;" .. package.path
+local config = require("riddle.config")
+local f = loadstring(io.read("*a"))
 local ok, t = pcall(f or error)
 if not (ok and type(t) == "table") then os.exit(1) end
-local v = t.password_variants
-if v == nil then os.exit(2) end
-if type(v) ~= "table" or #v == 0 then os.exit(1) end
-for _, s in ipairs(v) do
-  if type(s) ~= "string" or s == "" then os.exit(1) end
-end' >/dev/null 2>&1 || rc=$?
+if t.seal == nil then os.exit(t.password_variants ~= nil and 5 or 2) end
+local s = config.parse_seal(t.seal)
+if s.invalid then os.exit(1) end
+local parts = {}
+for _, k in ipairs({ "key", "minutes", "on_sleep", "remember", "off" }) do
+  if t.seal[k] ~= nil then parts[#parts + 1] = k .. " = " .. tostring(s[k]) end
+end
+io.write("  seal = { ", table.concat(parts, ", "), " },\n")
+os.exit(s.off and 3 or (s.on and 0 or 4))' 2>/dev/null) || rc=$?
   case $rc in
-    0) seal_body=$(cat "$SEAL") ;;
-    2) ;;
+    0) seal_state="есть" ;;
+    3) seal_state="снята (off)" ;;
+    4) ;;
+    2) seal_body="" ;;
+    5) seal_body=""
+       echo "в файле печати старое слово (password_variants) — не читается, нужна таблица seal (config.example.lua)" >&2 ;;
     *) echo "файл печати $SEAL битый — ничего не записано" >&2; exit 1 ;;
   esac
 fi
-if [ -n "$seal_body" ]; then echo "печать: есть"; else echo "печать: нет"; fi
+echo "печать: $seal_state"
 cfg=$(printf 'return {\n%s' "$body"; [ -z "$seal_body" ] || printf '%s' "$seal_body"; printf '\n}\n')
 printf '%s\n' "$cfg" |
   ssh kindle 'umask 077; mkdir -p /mnt/us/riddle; cat > /mnt/us/riddle/config.lua; chmod 600 /mnt/us/riddle/config.lua'

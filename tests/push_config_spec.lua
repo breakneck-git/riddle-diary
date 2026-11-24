@@ -17,9 +17,8 @@ local function write(path, text)
   f:close()
 end
 
--- файл печати (RIDDLE_SEAL): поля конфига про слово и подсказки, как в config.example.lua
-local SEAL = 'password_variants = { "fakeword", "фальшслово" },\n' ..
-  'hints = { "первая строка\\nвторая строка", [[многострочный\nстих]] },\n'
+-- файл печати (RIDDLE_SEAL): таблица seal, как в config.example.lua
+local SEAL = 'seal = { key = true, minutes = 30 },\n'
 
 -- каталог со скриптом-подделкой ssh, который складывает stdin в файл; seal_text = false — без файла печати
 local function sandbox(env_text, seal_text)
@@ -39,7 +38,7 @@ end
 
 local tests = {}
 
-function tests.test_writes_keys_and_password_variants()
+function tests.test_writes_keys_and_seal()
   -- Cloudflare в ~/.envs может быть (чужие проекты), на устройство не пишется
   local dir = sandbox("export CF_WORKERS_AI_TOKEN=fake-cf.BBB\n" ..
     "CF_WORKERS_AI_ACCOUNT_ID=acc123\nGEMINI_API_KEY=fake_gem_CCC\n")
@@ -54,13 +53,31 @@ function tests.test_writes_keys_and_password_variants()
   t.ok(not raw:find("fake-cf.BBB", 1, true) and not raw:find("acc123", 1, true), "ключи Cloudflare не ушли")
   t.ok(not raw:find("cf_", 1, true), "в config.lua нет полей cf_*")
   t.eq(cfg.gemini_key, "fake_gem_CCC")
-  t.eq(table.concat(cfg.password_variants, ","), "fakeword,фальшслово", "слово — из файла печати")
-  t.eq(#cfg.hints, 2, "подсказки — из файла печати")
-  t.eq(cfg.hints[1], "первая строка\nвторая строка")
-  t.eq(cfg.hints[2], "многострочный\nстих")
+  t.ok(raw:find("seal = {", 1, true), "в config.lua таблица seal: " .. raw)
+  t.eq(cfg.seal.on, true, "печать — из файла печати")
+  t.eq(cfg.seal.invalid, nil)
+  t.eq(cfg.seal.key, true)
+  t.eq(cfg.seal.minutes, 30)
+  t.eq(cfg.seal.remember, true)
 end
 
--- печать необязательна (владелец 2026-10-25): нет файла печати или в нём нет password_variants —
+-- все поля печати доходят до устройства как есть (в т.ч. off и remember = false)
+function tests.test_seal_fields_round_trip()
+  local dir = sandbox("GEMINI_API_KEY=fake_gem_CCC\n",
+    'seal = { key = true, minutes = 5, on_sleep = true, remember = false, off = true },\n')
+  local out, ok = run_script(dir)
+  t.ok(ok, out)
+  local s = config.load(dir .. "/out.lua").seal
+  t.eq(s.key, true)
+  t.eq(s.minutes, 5)
+  t.eq(s.on_sleep, true)
+  t.eq(s.remember, false)
+  t.eq(s.off, true)
+  t.eq(s.on, false, "off — печати нет")
+  t.ok(out:find("печать: снята", 1, true), out)
+end
+
+-- печать необязательна (владелец 2026-10-25): нет файла печати или в нём нет таблицы seal —
 -- конфиг пишется БЕЗ полей печати, скрипт говорит «печать: нет»
 function tests.test_missing_seal_file_writes_config_without_seal()
   local dir = sandbox("GEMINI_API_KEY=fake_gem_CCC\n", false)
@@ -69,12 +86,13 @@ function tests.test_missing_seal_file_writes_config_without_seal()
   t.ok(out:find("печать: нет", 1, true), out)
   local cfg = config.load(dir .. "/out.lua")
   t.eq(cfg.gemini_key, "fake_gem_CCC")
-  t.eq(#cfg.password_variants, 0, "слова нет")
-  t.eq(#cfg.hints, 0, "подсказок нет")
+  t.eq(cfg.seal.on, false, "печати нет")
+  t.eq(cfg.seal.invalid, nil)
 end
 
-function tests.test_seal_file_without_password_writes_no_seal_fields()
-  for _, text in ipairs({ '', '-- пусто\n', 'hints = { "только подсказка" },\n' }) do
+function tests.test_seal_file_without_seal_writes_no_seal_fields()
+  for _, text in ipairs({ '', '-- пусто\n', 'password_variants = { "fakeword" },\n',
+      'hints = { "только подсказка" },\n' }) do
     local dir = sandbox("GEMINI_API_KEY=fake_gem_CCC\n", text)
     local out, ok = run_script(dir)
     t.ok(ok, "файл без слова — успех: " .. text .. " / " .. out)
@@ -82,7 +100,8 @@ function tests.test_seal_file_without_password_writes_no_seal_fields()
     local f = assert(io.open(dir .. "/out.lua", "r"))
     local raw = f:read("*a")
     f:close()
-    t.ok(not raw:find("password_variants", 1, true) and not raw:find("hints", 1, true), "в конфиге нет полей печати: " .. raw)
+    t.ok(not raw:find("seal", 1, true) and not raw:find("password_variants", 1, true) and
+      not raw:find("hints", 1, true) and not raw:find("fakeword", 1, true), "в конфиге нет полей печати: " .. raw)
   end
 end
 
@@ -97,20 +116,19 @@ function tests.test_unreadable_seal_file_writes_nothing_and_fails()
   t.eq(io.open(dir .. "/out.lua", "r"), nil, "на устройство ничего не ушло")
 end
 
-function tests.test_seal_file_with_password_says_seal_present()
+function tests.test_seal_file_with_seal_says_seal_present()
   local dir = sandbox("GEMINI_API_KEY=fake_gem_CCC\n")
   local out, ok = run_script(dir)
   t.ok(ok, out)
   t.ok(out:find("печать: есть", 1, true), out)
-  t.ok(not out:find("fakeword", 1, true), "слово в выводе")
 end
 
--- битый файл печати (не Lua, слово не список непустых строк) не уходит: битый config.lua
--- оставил бы дневник без ключей
+-- битый файл печати (не Lua, seal нарушает правила config.lua) не уходит: на устройстве печать была бы закрыта
+-- без выхода, а битый config.lua оставил бы дневник без ключей
 function tests.test_bad_seal_file_writes_nothing_and_fails()
-  for _, bad in ipairs({ 'password_variants = { "x" ', 'this is not lua',
-      'password_variants = {},\n', 'password_variants = { 42 },\n', 'password_variants = { "" },\n',
-      'password_variants = { "fakeword", true },\n', 'password_variants = "fakeword",\n' }) do
+  for _, bad in ipairs({ 'seal = { key = true ', 'this is not lua', 'seal = { minutes = 5 },\n',
+      'seal = { on_sleep = true },\n', 'seal = { key = true, minutes = 0 },\n',
+      'seal = { key = true, minutes = 2.5 },\n', 'seal = { key = "yes" },\n', 'seal = true,\n' }) do
     local dir = sandbox("GEMINI_API_KEY=fake_gem_CCC\n", bad)
     local out, ok = run_script(dir)
     t.ok(not ok, "битый файл печати — ошибка: " .. bad .. " / " .. out)
@@ -138,7 +156,6 @@ function tests.test_does_not_print_values()
   t.ok(not out:find("fake_groq_AAA", 1, true), "ключ в выводе")
   t.ok(not out:find("fake_gem_CCC", 1, true), "ключ в выводе")
   t.ok(out:find("providers: 1", 1, true), out)
-  t.ok(not out:find("fakeword", 1, true) and not out:find("первая строка", 1, true), "печать в выводе")
 end
 
 -- GROQ_API_KEY -> запасной провайдер Groq в providers с after_legacy: идёт после Gemini

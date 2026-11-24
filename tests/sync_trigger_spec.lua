@@ -91,7 +91,7 @@ local function load_plugin(env)
     ["riddle.app"] = { new_controller = function() return { on_sleep = function() end } end,
                        hosts = function() return {} end },
     ["riddle.config"] = { load = function()
-      return { password_variants = {}, notion_token = env.token, tasks_source = env.tasks_source }
+      return { seal = { on = false }, notion_token = env.token, tasks_source = env.tasks_source }
     end },
     ["riddle.http"] = {},
     ["riddle.llm"] = { providers = function() return {} end },

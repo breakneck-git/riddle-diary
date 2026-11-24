@@ -653,27 +653,6 @@ function T.test_password_set_keeps_seal()
   t.ok(not logged(env, "seal off"), "строки «seal off» нет")
 end
 
--- битое слово в config.lua на устройстве (руками): печать закрыта, как до «печать необязательна»
-function T.test_invalid_password_in_config_keeps_seal_closed()
-  local config = require("riddle.config")
-  for _, bad in ipairs({ 'password_variants = "слово"', 'password_variants = { "слово", "" }',
-      'password_variants = { "слово", 5 }' }) do
-    local path = os.tmpname()
-    local f = assert(io.open(path, "w"))
-    f:write("return { " .. bad .. " }")
-    f:close()
-    local env = make({ cfg = config.load(path) })
-    os.remove(path)
-    t.ok(env.ctrl.sealed, "печать есть: " .. bad)
-    t.ok(not env.ctrl.seal_open, "закрыта: " .. bad)
-    t.ok(logged(env, "riddle: seal config invalid"), "лог: " .. bad .. " / " .. table.concat(env.logs, "\n"))
-    t.ok(not logged(env, "seal off"), "не «seal off»: " .. bad)
-    env:say("кто ты", "закрыто")
-    env:page()
-    t.ok(is_locked_call(env.llm_calls[1]), "запрос по закрытому промпту: " .. bad)
-  end
-end
-
 function T.test_no_password_sleep_does_not_close()
   local env = make({ variants = {} })
   env.ctrl:on_sleep()

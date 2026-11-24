@@ -11,32 +11,22 @@ local function write_cfg(text)
   return path
 end
 
-local NO_VARIANTS = {} -- слово живёт только в config.lua на устройстве; по умолчанию его нет
-
-local function same_list(a, b)
-  if #a ~= #b then return false end
-  for i = 1, #a do if a[i] ~= b[i] then return false end end
-  return true
-end
-
 local tests = {}
 
 function tests.test_missing_file_gives_keyless_defaults()
   local cfg = config.load("/nonexistent/riddle/config.lua")
   t.eq(cfg.gemini_key, nil)
   t.eq(cfg.openrouter_key, nil)
-  t.eq(cfg.hint_every, 3)
-  t.ok(same_list(cfg.password_variants, NO_VARIANTS), "слова по умолчанию нет, но список есть")
+  t.eq(cfg.seal.on, false, "печати по умолчанию нет")
 end
 
 function tests.test_loads_fields()
   local cfg = config.load(write_cfg([[return {
     gemini_key = "m", notion_token = "o",
-    password_variants = { "слово" }, hint_every = 4 }]]))
+    seal = { key = true } }]]))
   t.eq(cfg.gemini_key, "m")
   t.eq(cfg.notion_token, "o")
-  t.eq(cfg.hint_every, 4)
-  t.ok(same_list(cfg.password_variants, { "слово" }))
+  t.eq(cfg.seal.on, true)
 end
 
 function tests.test_notion_token_cleaned()
@@ -76,10 +66,10 @@ end
 -- OpenRouter убран из цепочки (2026-10-25): старый конфиг с openrouter_key грузится, ключ игнорируется
 function tests.test_openrouter_key_is_ignored()
   local llm = require("riddle.llm")
-  local cfg = config.load(write_cfg('return { gemini_key = "m", openrouter_key = "or", hint_every = 5 }'))
+  local cfg = config.load(write_cfg('return { gemini_key = "m", openrouter_key = "or", whose = "w" }'))
   t.eq(cfg.openrouter_key, nil, "поле не читается")
   t.eq(cfg.gemini_key, "m")
-  t.eq(cfg.hint_every, 5, "остальное загружено")
+  t.eq(cfg.whose, "w", "остальное загружено")
   t.eq(#llm.providers(cfg), 1, "только Gemini")
   t.eq(#llm.providers(config.load(write_cfg('return { openrouter_key = "or" }'))), 0)
 end
@@ -134,11 +124,11 @@ end
 -- лишние ключи (Groq, Cloudflare из старых конфигов): загрузка не ломается, поля не читаются, провайдера нет
 function tests.test_extra_keys_do_not_break_load_and_give_no_provider()
   local llm = require("riddle.llm")
-  local alone = config.load(write_cfg('return { groq_key = "g", cf_token = "c", cf_account = "a", stale = 1 }'))
+  local alone = config.load(write_cfg('return { groq_key = "g", cf_token = "c", cf_account = "a", stale = 1, whose = "w" }'))
   t.eq(alone.groq_key, nil, "Groq из цепочки исключён — поле не читается")
   t.eq(alone.cf_token, nil, "Cloudflare из цепочки исключён — поле не читается")
   t.eq(alone.cf_account, nil)
-  t.eq(alone.hint_every, 3, "остальное загружено")
+  t.eq(alone.whose, "w", "остальное загружено")
   t.eq(#llm.providers(alone), 0, "лишние ключи провайдера не дают")
   local mixed = config.load(write_cfg('return { cf_token = "c", gemini_key = "m" }'))
   t.eq(mixed.gemini_key, "m")
@@ -150,54 +140,27 @@ function tests.test_partial_file_fills_defaults()
   local cfg = config.load(write_cfg('return { gemini_key = "m" }'))
   t.eq(cfg.gemini_key, "m")
   t.eq(cfg.openrouter_key, nil)
-  t.eq(cfg.hint_every, 3)
-  t.ok(same_list(cfg.password_variants, NO_VARIANTS))
+  t.eq(cfg.seal.on, false)
 end
 
 function tests.test_syntax_error_gives_keyless_defaults()
   local cfg = config.load(write_cfg("return { gemini_key = "))
   t.eq(cfg.gemini_key, nil)
-  t.eq(cfg.hint_every, 3)
-end
-
--- слово в конфиге есть, но битое — печать закрыта (seal_invalid), а не «печати нет»: иначе
--- опечатка в config.lua на устройстве открывала бы дневник
-function tests.test_invalid_password_variants_flagged()
-  for _, bad in ipairs({ 'password_variants = "слово"', 'password_variants = { "слово", "" }',
-      'password_variants = { "слово", 5 }', 'password_variants = { 5 }', 'password_variants = true' }) do
-    local cfg = config.load(write_cfg("return { " .. bad .. " }"))
-    t.eq(cfg.seal_invalid, true, "битое слово: " .. bad)
-    t.ok(same_list(cfg.password_variants, NO_VARIANTS), "слова нет: " .. bad)
-  end
-  -- битый файл целиком: что в нём было, неизвестно — тоже закрыто
-  t.eq(config.load(write_cfg("return { gemini_key = ")).seal_invalid, true, "синтаксис")
-  t.eq(config.load(write_cfg('error("boom")')).seal_invalid, true, "ошибка при загрузке")
-end
-
--- печати нет (не битая): поля нет, пустой список, все варианты пустые, файла нет; валидное слово — не флаг
-function tests.test_absent_or_empty_password_not_flagged()
-  for _, ok in ipairs({ 'gemini_key = "m"', 'password_variants = {}', 'password_variants = { "", "" }',
-      'password_variants = { "слово" }' }) do
-    t.eq(config.load(write_cfg("return { " .. ok .. " }")).seal_invalid, nil, "не битое: " .. ok)
-  end
-  t.eq(config.load("/nonexistent/riddle/config.lua").seal_invalid, nil, "нет файла — печати нет")
 end
 
 function tests.test_runtime_error_gives_keyless_defaults()
   local cfg = config.load(write_cfg('error("boom")'))
   t.eq(cfg.gemini_key, nil)
-  t.ok(same_list(cfg.password_variants, NO_VARIANTS))
 end
 
 function tests.test_non_table_result_gives_defaults()
   local cfg = config.load(write_cfg('return "oops"'))
   t.eq(cfg.gemini_key, nil)
-  t.eq(cfg.hint_every, 3)
 end
 
 function tests.test_placeholder_and_empty_keys_are_absent()
   local cfg = config.load(write_cfg([[return {
-    notion_token = "your_token_here", gemini_key = 42, hint_every = 3 }]]))
+    notion_token = "your_token_here", gemini_key = 42 }]]))
   t.eq(cfg.notion_token, nil, "заглушка из примера — не ключ")
   t.eq(cfg.gemini_key, nil, "не строка — не ключ")
   cfg = config.load(write_cfg('return { notion_token = "", gemini_key = "real" }'))
@@ -227,47 +190,131 @@ function tests.test_example_file_is_keyless()
   t.eq(cfg.gemini_key, nil)
   t.eq(cfg.openrouter_key, nil)
   t.eq(#cfg.providers, 0, "в примере ключ-заглушка: провайдер из примера не подключается")
-  t.eq(cfg.hint_every, 3)
-end
-
-function tests.test_bad_hint_every_and_variants_fall_back()
-  local cfg = config.load(write_cfg('return { hint_every = 0, password_variants = {} }'))
-  t.eq(cfg.hint_every, 3)
-  t.ok(same_list(cfg.password_variants, NO_VARIANTS))
-  local cfg2 = config.load(write_cfg('return { hint_every = "x", password_variants = { 1, 2 } }'))
-  t.eq(cfg2.hint_every, 3)
-  t.ok(same_list(cfg2.password_variants, NO_VARIANTS))
 end
 
 function tests.test_default_path_is_device_path()
   t.eq(config.DEFAULT_PATH, "/mnt/us/riddle/config.lua")
   -- вызов без пути на Mac: файла нет → пустой конфиг, не падение
   local cfg = config.load()
-  t.eq(cfg.hint_every, 3)
+  t.eq(cfg.seal.on, false)
 end
 
 function tests.test_loads_are_independent()
-  local path = write_cfg('return { password_variants = { "слово" } }')
+  local path = write_cfg('return { seal = { key = true } }')
   local a = config.load(path)
-  a.password_variants[1] = "испорчено"
-  local b = config.load(path)
-  t.eq(b.password_variants[1], "слово")
-  t.eq(config.load("/nonexistent").password_variants[1], nil)
+  a.seal.key = false
+  t.eq(config.load(path).seal.key, true)
 end
 
--- подсказки печати: список строк (стихи); пустые и не-строки отброшены; нет поля — пусто
-function tests.test_loads_hints()
-  local cfg = config.load(write_cfg([[return {
-    password_variants = { "слово" }, hints = { "стих 1\nстрока", "", 5, "стих 2" } }]]))
-  t.ok(same_list(cfg.hints, { "стих 1\nстрока", "стих 2" }), table.concat(cfg.hints or {}, "|"))
-  t.ok(same_list(config.load(write_cfg('return { hints = "стих" }')).hints, {}), "не список — пусто")
-  t.ok(same_list(config.load("/nonexistent").hints, {}), "нет файла — пусто")
+-- печать (spec 2026-11-20 §3): таблица seal, всегда есть в cfg
+local function seal_of(body)
+  return config.load(write_cfg("return { " .. body .. " }")).seal
+end
+
+function tests.test_seal_absent_is_off()
+  for _, s in ipairs({ seal_of(""), config.load("/nonexistent/riddle/config.lua").seal, seal_of("seal = {}"),
+      seal_of("seal = { remember = false }"), seal_of("seal = { on_sleep = false }") }) do
+    t.eq(s.on, false, "правил нет — печати нет")
+    t.eq(s.invalid, nil)
+    t.eq(s.key, false)
+    t.eq(s.minutes, nil)
+    t.eq(s.on_sleep, false)
+    t.eq(s.off, false)
+  end
+  t.eq(seal_of("").remember, true, "remember по умолчанию true")
+end
+
+function tests.test_seal_key_only()
+  local s = seal_of("seal = { key = true }")
+  t.eq(s.on, true)
+  t.eq(s.key, true)
+  t.eq(s.minutes, nil)
+  t.eq(s.on_sleep, false)
+  t.eq(s.remember, true)
+  t.eq(s.invalid, nil)
+end
+
+function tests.test_seal_all_rules()
+  local s = seal_of("seal = { key = true, minutes = 30, on_sleep = true }")
+  t.eq(s.on, true)
+  t.eq(s.minutes, 30)
+  t.eq(s.on_sleep, true)
+  t.eq(s.invalid, nil)
+end
+
+function tests.test_seal_off_wins()
+  local s = seal_of("seal = { key = true, minutes = 5, off = true }")
+  t.eq(s.on, false)
+  t.eq(s.off, true)
+  -- off — выход из битого конфига: снимает и битую печать
+  local bad = seal_of("seal = { minutes = 5, off = true }")
+  t.eq(bad.on, false, "off побеждает и правило без key")
+  t.eq(bad.invalid, nil)
+end
+
+function tests.test_seal_rule_without_key_invalid()
+  for _, body in ipairs({ "seal = { minutes = 5 }", "seal = { on_sleep = true }",
+      "seal = { key = false, minutes = 5 }" }) do
+    local s = seal_of(body)
+    t.eq(s.on, true, "закрыта: " .. body)
+    t.ok(type(s.invalid) == "string" and s.invalid:find("key", 1, true), "причина про key: " .. body .. " / " ..
+      tostring(s.invalid))
+  end
+end
+
+function tests.test_seal_bad_minutes_invalid()
+  for _, v in ipairs({ "0", "2.5", '"5"', "-1", "true" }) do
+    local s = seal_of("seal = { key = true, minutes = " .. v .. " }")
+    t.eq(s.on, true, "закрыта: " .. v)
+    t.ok(type(s.invalid) == "string" and s.invalid:find("minutes", 1, true), "причина про minutes: " .. v)
+  end
+end
+
+function tests.test_seal_non_bool_flags_invalid()
+  for _, body in ipairs({ 'key = "yes"', "key = 1", 'key = true, on_sleep = "y"', "key = true, remember = 0",
+      'key = true, off = "true"' }) do
+    local s = seal_of("seal = { " .. body .. " }")
+    t.eq(s.on, true, "закрыта: " .. body)
+    t.ok(type(s.invalid) == "string", "invalid: " .. body)
+  end
+  local s = seal_of('seal = "key"')
+  t.eq(s.on, true, "seal не таблица — закрыта")
+  t.ok(type(s.invalid) == "string")
+end
+
+function tests.test_seal_remember_false()
+  local s = seal_of("seal = { key = true, remember = false }")
+  t.eq(s.remember, false)
+  t.eq(s.on, true)
+end
+
+-- файл есть, но не загрузился: что в нём было, неизвестно — печать закрыта
+function tests.test_broken_file_closes_seal()
+  for _, text in ipairs({ "return { gemini_key = ", 'error("boom")', 'return "oops"' }) do
+    local s = config.load(write_cfg(text)).seal
+    t.eq(s.on, true, "закрыта: " .. text)
+    t.ok(type(s.invalid) == "string", "invalid: " .. text)
+  end
+end
+
+-- старое слово (Review Focus 5): не читается, печати нет, флаг для лога
+function tests.test_legacy_word_ignored()
+  local cfg = config.load(write_cfg('return { password_variants = { "x" }, hints = { "h" }, hint_every = 2 }'))
+  t.eq(cfg.seal.on, false)
+  t.eq(cfg.seal.invalid, nil)
+  t.eq(cfg.legacy_word, true)
+  t.eq(cfg.password_variants, nil)
+  t.eq(cfg.hints, nil)
+  t.eq(cfg.hint_every, nil)
+  t.eq(cfg.seal_invalid, nil)
+  t.eq(config.load(write_cfg('return { seal = { key = true } }')).legacy_word, nil, "без слова флага нет")
 end
 
 function tests.test_example_file_has_seal_fields()
-  local cfg = config.load("config.example.lua")
-  t.ok(#cfg.password_variants >= 1, "пример показывает поле слова")
-  t.ok(#(cfg.hints or {}) >= 1, "пример показывает поле подсказок")
+  local s = config.load("config.example.lua").seal
+  t.eq(s.on, true, "пример показывает таблицу seal")
+  t.eq(s.invalid, nil, "пример печати валиден")
+  t.eq(s.key, true)
 end
 
 function tests.test_gemini_keys_list_is_cleaned()

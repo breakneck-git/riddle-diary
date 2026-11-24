@@ -84,8 +84,11 @@ local function getController()
             if not fok then logger.warn("riddle: persona forget failed", ferr) end
             os.remove(FORGET_PATH)
         end
+        if cfg.legacy_word then
+            logger.warn("riddle: config password_variants ignored (seal is a drawn key now)")
+        end
         logger.info("riddle: controller ready, providers", #llm.providers(cfg),
-            "password variants", #cfg.password_variants, "memory", mem and "ok" or "none")
+            "seal", cfg.seal.on and (cfg.seal.invalid or "on") or "off", "memory", mem and "ok" or "none")
     end)
     if not ok then
         logger.err("riddle: controller init failed", err)

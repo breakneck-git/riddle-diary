@@ -91,7 +91,7 @@ end
 local function controller_stubs(seen)
   return {
     ["riddle.app"] = { new_controller = function(d) seen.deps = d; return {} end, hosts = function() return {} end },
-    ["riddle.config"] = { load = function() return { password_variants = {} } end },
+    ["riddle.config"] = { load = function() return { seal = { on = false } } end },
     ["riddle.http"] = {},
     ["riddle.llm"] = { providers = function() return {} end },
     ["riddle.memory"] = { open = function() return {} end },
@@ -117,7 +117,7 @@ function tests.test_warm_dns_uses_hosts_from_config()
     HOSTS = { "default.test" },
     when_idle = function(_, _, fn) fn() end,
   }
-  stubs["riddle.config"] = { load = function() return { password_variants = {}, marker = "cfg" } end }
+  stubs["riddle.config"] = { load = function() return { seal = { on = false }, marker = "cfg" } end }
   stubs["riddle.http"] = { dns_cache = {}, dns_reset = function() end, warm = function(h) warmed = h end }
   stubs["ui/time"] = { monotonic = function() return 0 end, to_ms = function() return 0 end }
   local plugin, ui = load_plugin({}, stubs)
@@ -139,7 +139,7 @@ function tests.test_start_warm_dns_uses_config_hosts_before_controller()
     HOSTS = { "default.test" },
     when_idle = function(_, _, fn) fn() end,
   }
-  stubs["riddle.config"] = { load = function() return { password_variants = {}, marker = "cfg" } end }
+  stubs["riddle.config"] = { load = function() return { seal = { on = false }, marker = "cfg" } end }
   stubs["riddle.http"] = { dns_cache = {}, dns_reset = function() end, warm = function(h) warmed = h end }
   stubs["ui/time"] = { monotonic = function() return 0 end, to_ms = function() return 0 end,
                        to_us = function() return 0 end }
