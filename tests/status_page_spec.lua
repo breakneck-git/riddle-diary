@@ -6,6 +6,7 @@ require("sqlite_shim") -- riddle.sync тянет хранилище
 local t = require("t")
 local stand = require("seal_stand")
 local controller = require("riddle.controller")
+local texts = require("riddle.texts")
 local status = require("riddle.status")
 local sync = require("riddle.sync")
 
@@ -89,8 +90,9 @@ local function fake_runner()
   return r
 end
 
-local function ctl()
-  return controller.new{
+-- extra — свои deps поверх стенда (образец ключа: load_key, write_key)
+local function ctl(extra)
+  local deps = {
     cfg = { seal = stand.key() },
     memory = nil,
     read_file = function() return "PNG" end,
@@ -103,6 +105,8 @@ local function ctl()
     remote_fn = function() return function() return {} end end,
     absorb = function(payload) return payload.result, payload.err end,
   }
+  for k, v in pairs(extra or {}) do deps[k] = v end
+  return controller.new(deps)
 end
 
 local function reply(read, text) return { result = { read = read, reply = text } } end
@@ -130,7 +134,7 @@ local function healthy()
 end
 
 -- виджет с холстом; печать закрыта; тексты страницы — в d.painted, обновления экрана — в d.pushes
-local function diary()
+local function diary(extra)
   clock, timeline, LOG = 0, {}, {}
   Diary.map_kept = nil
   local d = setmetatable({
@@ -139,7 +143,7 @@ local function diary()
     face_answer = { ftsize = { getHeightAndAscender = function() return 52, 40 end } },
     stats = { frames = 0, frame_us = 0, frame_us_max = 0, sink_ticks = 0, sink_us = 0, sink_us_max = 0,
               ans_steps = 0, ans_us_max = 0, grey_px = 0, lost_ink = 0 },
-    controller = ctl(),
+    controller = ctl(extra),
     runner = fake_runner(),
     revealed = {},
   }, { __index = Diary })
@@ -775,6 +779,74 @@ function T.test_probe_timeout_is_probe_ceiling_not_answer_ceiling()
   local job = probe_job(d)
   t.ok(job, "проба стартовала")
   t.eq(job.opts.timeout_s, 7, "таймаут пробы — probe_ceil_s, не ceil_s")
+end
+
+-- режим «задать ключ» (план seal-key, задача 5): образца нет; writes — записи образца
+local SQUARE = TF.square
+local SQUARE_AGAIN = { { p = { 230, 320, 560, 310, 545, 660, 215, 640, 230, 320 } } }
+
+local function setting_diary()
+  local writes = {}
+  local d = diary({
+    load_key = function() return nil, "absent" end,
+    write_key = function(path, s)
+      writes[#writes + 1] = { path = path, s = s }
+      return true
+    end,
+  })
+  return d, writes
+end
+
+local function dissolved(strokes)
+  local out = {}
+  for i, s in ipairs(strokes) do out[i] = { p = s.p, lvl = Diary.CFG.dissolve.steps } end
+  return out
+end
+
+-- попытка знака — не сообщение: модель её не видит, ответ — фраза режима; страница со словами — обычный разговор
+function T.test_key_page_not_sent()
+  local d, writes = setting_diary()
+  page_done(d, dissolved(SQUARE))
+  run(1)
+  t.eq(not_probe(d), 0, "первый рисунок не ушёл в модель")
+  t.eq(d.inflight, 0)
+  t.eq(d.revealed[#d.revealed], texts.key_again)
+  page_done(d, dissolved(SQUARE_AGAIN))
+  run(120) -- «Ещё раз» уступает экран следующей фразе по таймеру
+  t.eq(not_probe(d), 0, "второй рисунок не ушёл в модель")
+  t.eq(d.revealed[#d.revealed], texts.key_saved)
+  t.eq(#writes, 1, "образец записан")
+  t.eq(d.controller.seal_open, true, "ключ задан — печать открыта")
+end
+
+function T.test_words_page_in_setting_goes_to_model()
+  local d = setting_diary()
+  page_done(d) -- страница без знака (штрихов больше MAX_STROKES в жизни; здесь — пустой список)
+  t.eq(not_probe(d), 1, "страница ушла в модель")
+  t.eq(d.inflight, 1)
+end
+
+-- в режиме задания треугольник — попытка знака («этот знак занят»), не страница состояния (спека §5: ключ — первым)
+function T.test_triangle_in_setting_is_taken()
+  local d = setting_diary()
+  page_done(d, strokes_of(TF, "equilateral"))
+  run(1)
+  t.eq(d.status, nil, "страница состояния не открыта")
+  t.eq(d.revealed[#d.revealed], texts.key_taken)
+  t.eq(not_probe(d), 0)
+end
+
+-- случайное касание в режиме задания — молчит, как всегда (не «Крупнее»), и не считается рисунком
+function T.test_tiny_touch_in_setting_silent()
+  local d = setting_diary()
+  d.page = { strokes = dissolved({ { p = { 300, 300, 304, 302 } } }), ink = { 300, 300, 304, 302 } }
+  d:onPageDone()
+  run(1)
+  t.eq(#d.revealed, 0, "касание без ответа")
+  t.eq(not_probe(d), 0)
+  page_done(d, dissolved(SQUARE))
+  run(1)
+  t.eq(d.revealed[#d.revealed], texts.key_again, "касание не стало первым рисунком")
 end
 
 t.run(T)

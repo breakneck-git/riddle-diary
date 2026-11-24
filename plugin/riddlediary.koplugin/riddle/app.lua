@@ -7,6 +7,8 @@ local controller = require("riddle.controller")
 local llm = require("riddle.llm")
 local str = require("riddle.str")
 local prompt = require("riddle.prompt")
+local seal = require("riddle.seal")
+local file = require("riddle.file")
 
 local app = {}
 
@@ -427,7 +429,8 @@ end
 
 -- d: cfg, memory, http, clock (монотонные с), wall (os.time), log, file_mtime;
 -- необязательно: read_file, remove, random, b64, lore_path, devmode (текст read и сырые поля ответа — в лог),
--- knowledge_path (знание из Notion, по умолчанию knowledge.PATH)
+-- knowledge_path (знание из Notion, по умолчанию knowledge.PATH), key_path (образец ключа печати, по умолчанию
+-- seal.KEY_PATH; образец пишется только через file.write_atomic)
 function app.new_controller(d)
   local chain = app.chain(d)
   return controller.new{
@@ -448,6 +451,10 @@ function app.new_controller(d)
     devmode = d.devmode,
     knowledge_text = app.knowledge_text(d),
     set_tasks_source = app.set_tasks_source(d),
+    key_path = d.key_path,
+    load_key = seal.load_key,
+    write_key = function(path, s) return file.write_atomic(path, s) end,
+    forget_key = seal.forget_key,
   }
 end
 

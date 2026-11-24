@@ -823,6 +823,7 @@ local KEYS2 = { gemini_keys = { "kA", "kB" }, seal = stand.key() }
 
 function T.test_remote_payload_carries_logs_and_dead_keys()
   local env = make(KEYS2)
+  env.logs = {} -- лог старта контроллера (образец ключа) — родитель, не дочерний
   local chain = app.chain(env.deps)
   env.script[1] = { status = 401, body = '{"error":{"message":"API key not valid."}}' }
   env.script[2] = { body = resp({ read = "кто ты", reply = "Я — страницы." }) }

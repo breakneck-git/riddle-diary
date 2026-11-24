@@ -5,6 +5,7 @@
 -- сторонам): тогда nil (begin — nil, nil), модель не вызывается, показывать нечего.
 
 local seal = require("riddle.seal")
+local glyph = require("riddle.glyph")
 local texts = require("riddle.texts")
 local prompt = require("riddle.prompt")
 local str = require("riddle.str")
@@ -76,6 +77,7 @@ function Controller.new(deps)
     end,
   })
   self.pending = self:_load_pending()
+  self:_load_key()
   if self.seal.invalid then
     -- битые правила в конфиге: печать закрыта и ключом не открывается — опечатка дневник не открывает
     self:_log("riddle: seal config invalid: " .. self.seal.invalid)
@@ -89,6 +91,62 @@ end
 
 function Controller:_log(msg)
   if self.deps.log then pcall(self.deps.log, msg) end
+end
+
+-- образец ключа на старте (спека §5, §9): флаг off — образец удаляется (решение владельца «А»: знак забыт, флаг
+-- снят — режим «задать ключ» с нуля); ключ в правилах — образец читается: нет файла — режим задания, битый — печать
+-- закрыта (Review Focus 2). deps.load_key / forget_key передаёт app.new_controller (seal.load_key, seal.forget_key);
+-- стенд без них образца не знает — печать как до ключа
+function Controller:_load_key()
+  local deps, s = self.deps, self.seal
+  local path = deps.key_path or seal.KEY_PATH
+  self.key_path = path
+  if s.rules.off then
+    if deps.forget_key then
+      local ok, err = deps.forget_key(path)
+      if not ok then self:_log("riddle: seal key forget failed: " .. tostring(err)) end
+    end
+    return
+  end
+  if not (s:wants_key() and deps.load_key) then return end
+  local drawings, err = deps.load_key(path)
+  s:key_loaded(drawings, err)
+  if s.setting then
+    self:_log("riddle: seal key absent, setting mode")
+  elseif not drawings then
+    self:_log("riddle: seal key unreadable")
+  end
+end
+
+-- страница из штрихов (виджет, до треугольника) -> фраза | nil. В режиме «задать ключ» страница до
+-- glyph.MAX_STROKES штрихов — попытка знака: модель её не видит, в память она не идёт (спека §5, шаги 2–6).
+-- Первый рисунок живёт только в памяти (key_first; сон, закрытие и перезапуск его сбрасывают); второй
+-- сверяется с ним, совпал — образец из обоих пишется на устройство и печать открывается. Не совпал — режим заново,
+-- без счётчика попыток. Иначе nil: страница идёт дальше по порядку
+function Controller:key_page(strokes)
+  if not self.seal.setting or #strokes == 0 or #strokes > glyph.MAX_STROKES then return nil end
+  local fits, why = glyph.fits(strokes)
+  if not fits then return why == "size" and texts.key_bigger or texts.key_taken end
+  local first = self.key_first
+  if not first then
+    self.key_first = strokes
+    return texts.key_again
+  end
+  self.key_first = nil
+  if not glyph.match(strokes, { first }) then
+    self:_log("riddle: seal key setting, drawings differ")
+    return texts.key_retry
+  end
+  local drawings = { first, strokes }
+  local ok, err = self.deps.write_key(self.key_path, seal.encode(drawings))
+  if not ok then
+    self:_log("riddle: seal key write failed: " .. tostring(err))
+    return texts.key_retry
+  end
+  self:_log("riddle: seal key saved")
+  self.seal:key_saved(drawings, self.deps.now())
+  self:_opened()
+  return texts.key_saved
 end
 
 -- «мешок» на каждый список: фраза не вернётся, пока не показаны все остальные;
@@ -511,6 +569,8 @@ function Controller:opening_text()
   -- чистая страница — как новая: строка конфига читается заново. Иначе сбой чтения до сна держал бы её действующей
   -- до первой записи, и отвергнутая строка давала бы приветствие вместо «Чей это дневник?»
   self:_config_changed()
+  -- ключ ещё не задан: страница ждёт знак (спека §5, шаг 1); вопрос о строке — после, когда печать откроется
+  if self.seal.setting then return texts.key_draw end
   -- вопрос о строке — и при закрытой печати: страница отвечает на вопрос, который был на экране (spec §4)
   -- строки нет вовсе: «Чей это дневник?» (задача 8); ответ уже прочитан и ждёт «да» — тот же вопрос с миром
   if self:_asking() then return self:_ask_open() end
@@ -1050,6 +1110,14 @@ function Controller:_answer(job, result, err)
   end
 end
 
+-- печать только что открыта ключом (seal_toggle, key_page): данные снова доступны — разговор идёт из памяти,
+-- хвост (лор, пересказ ждущей сессии) положен, как на старте без печати
+function Controller:_opened()
+  self:_log("riddle: seal opened by key")
+  self.closed_turns = {}
+  self.followup_due = true
+end
+
 -- ключ узнан (задача 6): закрытую печать открывает приветствием, открытую закрывает фразой texts.seal_closed.
 -- Модель не зовётся, в память ничего. -> текст | nil: печать не сдвинулась (её нет или конфиг битый)
 function Controller:seal_toggle()
@@ -1061,11 +1129,7 @@ function Controller:seal_toggle()
     return texts.seal_closed
   end
   if not s:unlock(self.deps.now()) then return nil end
-  self:_log("riddle: seal opened by key")
-  -- данные снова доступны: разговор идёт из памяти, хвост (лор, пересказ ждущей сессии) положен, как на старте
-  -- без печати
-  self.closed_turns = {}
-  self.followup_due = true
+  self:_opened()
   local welcome = self:_pick(self:texts("welcomes"))
   -- строка ждёт ответа: вопрос идёт вместе с приветствием (страница при закрытой печати тоже задала бы его —
   -- opening_text и _begin, — но ключ открывает печать без страницы)
@@ -1434,11 +1498,13 @@ end
 -- дневник закрыт: таймер ждущего хвоста упал вместе с виджетом (onCloseWidget), хвост не начнётся — гаснут его вид
 -- и метка свёртки (как во сне); флаги пересказа и свёртки остаются хвосту следующего ответа
 function Controller:on_close()
+  self.key_first = nil -- задание ключа, прерванное закрытием, начинается заново
   self.tail, self.roll_tail = false, false
   self.map_hold, self.map_next = nil, nil -- следующее открытие — новая попытка данных карты, пересказ раньше неё
 end
 
 function Controller:on_sleep()
+  self.key_first = nil -- задание ключа, прерванное сном, начинается заново (Review Focus 4)
   self.map_hold, self.map_next = nil, nil -- после сна — новая попытка данных карты, пересказ раньше неё
   self.roll_tail = false -- хвост свёртки, не начатый до сна, — не повод для паузы у хвоста после него
   self.tail = false -- и хвост, не начатый до сна: после него хвост берётся заново

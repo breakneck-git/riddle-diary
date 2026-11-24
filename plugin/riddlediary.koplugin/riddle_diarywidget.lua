@@ -83,6 +83,7 @@ local png = require("riddle.png")
 local net = require("riddle.net")
 local rose = require("riddle.rose")
 local triangle = require("riddle.triangle")
+local glyph = require("riddle.glyph")
 local status = require("riddle.status")
 local str = require("riddle.str")
 local prompt = require("riddle.prompt")
@@ -1372,6 +1373,24 @@ function Diary:onPageDone()
     -- nothing of the diary; owner: «во всех случаях»); a rose of the winds only under an open seal (plan of the map).
     -- Under a closed seal a page of 1–2 strokes is mostly a try at the seal word, not at a sign: no stroke file for it
     local ctl = self.controller
+    -- an accidental touch (owner 2026-10-25): its PNG would be under png.MIN_SIDE on both sides
+    local _, _, w, h = self:sampleBox(pg)
+    local tiny = png.tiny(w, h)
+    local top = math.max(pg.ink[2] - 10, self:textFloor())
+    -- the seal's key goes first, before the triangle (spec 2026-11-20-seal-key §5): a try at the sign (up to
+    -- glyph.MAX_STROKES strokes; never an accidental touch) is not a message either -- its phrase takes the page's
+    -- place in the queue, without the model
+    if ctl and not tiny and #pg.strokes <= glyph.MAX_STROKES then
+        local was_open = ctl.seal_open
+        local phrase = ctl:key_page(pg.strokes)
+        if phrase then
+            logger.info("riddle: key page")
+            self.queue[#self.queue + 1] = { text = phrase, top = top, page = pg,
+                                            unlocked = ctl.seal_open and not was_open }
+            self:nextAnswer()
+            return
+        end
+    end
     local sealed = ctl and not ctl.seal_open
     if self:isSign(triangle, "triangle", pg.strokes, not sealed) then
         self:queueMode("status", pg, "triangle")
@@ -1381,16 +1400,13 @@ function Diary:onPageDone()
         self:queueMode("map", pg, "rose")
         return
     end
-    -- an accidental touch (owner 2026-10-25): its PNG would be under png.MIN_SIDE on both sides.
-    -- It never reaches the model, even during the ponder (no refusal for it): no PNG, no answer,
+    -- an accidental touch never reaches the model, even during the ponder (no refusal for it): no PNG, no answer,
     -- inflight unchanged; its ink dissolves as usual
-    local _, _, w, h = self:sampleBox(pg)
-    if png.tiny(w, h) then
+    if tiny then
         logger.info(string.format("riddle: page too small %dx%d -> skipped", w, h))
         self:maybeIdle() -- the sink may have found the ink gone while the page was still open
         return
     end
-    local top = math.max(pg.ink[2] - 10, self:textFloor())
     local async = self.runner ~= nil
     -- an answer is on its way: this page never reaches the model (no PNG, inflight unchanged),
     -- it gets a refusal in its place in the queue
