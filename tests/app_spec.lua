@@ -195,6 +195,14 @@ function T.test_open_seal_without_memory_fails_for_config_line_without_model_cal
   t.eq(#env.posts, 0, "модель не вызвана")
 end
 
+-- та же фраза сбоя — явной веткой «базы нет», а не падением чтения персоны: в логе причина, ошибки Lua нет
+function T.test_open_seal_without_memory_logs_reason_not_crash()
+  local env = make({ gemini_key = "km", seal = stand.none(), whose = "Hermione Granger" })
+  env.ctrl:on_page(PNG)
+  t.ok(logged(env, "riddle: on_page failed: no memory"), table.concat(env.logs, "\n"))
+  t.ok(not logged(env, "attempt to"), "без падения: " .. table.concat(env.logs, "\n"))
+end
+
 -- devmode доходит до контроллера через app.new_controller: без него текст read в лог не идёт
 function T.test_seal_log_without_devmode_hides_read_text()
   local env = make()

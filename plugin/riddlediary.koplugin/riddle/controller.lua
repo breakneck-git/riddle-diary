@@ -917,10 +917,14 @@ function Controller:_begin(png_path, with_run)
   -- строки нет: страница — ответ на «Чей это дневник?» (читается без образа и без памяти, _ask_answer)
   if self.saved_ask and self.saved_ask.failed then self.saved_ask = nil end -- сбой чтения — перечитать
   local asking = self:_asking()
-  if not asking and not deps.memory and not self:_data_ok() and not self:_builtin() then
-    -- база не открылась (main.lua), а строка не «Методов»: персону взять негде. Закрытой печати она не нужна — ответ
-    -- нейтральный (persona.NONE_VIEW: без персонажа, на языке записи), без данных и без записи. Открытой нужна
-    -- память — она идёт в _current ниже и получает фразу сбоя
+  if not asking and not deps.memory and not self:_builtin() then
+    -- база не открылась (main.lua), а строка не «Методов»: персону взять негде. Открытой печати нужна память — фраза
+    -- сбоя, модель не зовётся. Закрытой персона не нужна — ответ нейтральный (persona.NONE_VIEW: без персонажа, на
+    -- языке записи), без данных и без записи
+    if self:_data_ok() then
+      self:_log("riddle: on_page failed: no memory")
+      return nil, self:_pick(self:texts("fail_other"))
+    end
     view = persona.NONE_VIEW
   elseif not asking then
     ok, view, row, parts = pcall(self._current, self)
