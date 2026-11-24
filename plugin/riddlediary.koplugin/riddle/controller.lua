@@ -421,11 +421,12 @@ function Controller:owner_name()
 end
 
 -- как пишущий назвал себя в записи (ключ "name", prompt.NAME_FORMAT) -> строке персоны страницы (job.persona_id), если
--- страница пишет в память (job.write); негодное (mapdata.owner) — мимо, прежнее имя остаётся. В лог — только итог, без
--- имени и без текста ошибки (в нём может быть имя)
+-- страница пишет в память (job.write) и собрана при открытой печати: при закрытой (job.closed) пишет, может быть, не
+-- владелец — имя на карте не меняется и при remember (владелец 2026-11-25). Негодное (mapdata.owner) — мимо, прежнее
+-- имя остаётся. В лог — только итог, без имени и без текста ошибки (в нём может быть имя)
 function Controller:_save_owner_name(job, name)
   name = mapdata.owner(name)
-  if not (job.persona_id and name and job.write) then return end
+  if not (job.persona_id and name and job.write) or job.closed then return end
   local memory = self.deps.memory
   local ok, saved = pcall(memory.set_owner_name, memory, job.persona_id, name)
   self:_log((ok and saved) and "riddle: owner name saved" or "riddle: owner name save failed")

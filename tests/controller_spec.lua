@@ -740,6 +740,23 @@ function T.test_needs_data_false_not_counted()
   for i = 0, 4 do t.eq(ask_data(env, 1000 + i * 60, false), ASK_REPLY, "ответ " .. i + 1) end
 end
 
+-- имя владельца на карте при закрытой печати не меняется и при remember = true (решение владельца 2026-11-25): чужой,
+-- назвавшийся другим именем, его не перезаписывает. Реплики при этом в память ложатся (remember); при открытой — имя
+-- пишется
+function T.test_closed_seal_keeps_owner_name()
+  local env = data_env()
+  local names = owner_names(env)
+  env.script[1] = { read = "меня зовут Драко", reply = "ответ", name = "Драко" }
+  env:page()
+  t.eq(#names, 0, "при закрытой имя не записано")
+  t.eq(#env.memory.adds, 2, "реплики — в память (remember)")
+  env:unlock()
+  env.script[1] = { read = "меня зовут Гарри", reply = "ответ", name = "Гарри" }
+  env:page()
+  t.eq(#names, 1, "при открытой — записано")
+  t.eq(names[1].name, "Гарри")
+end
+
 -- связность закрытой печати хранится в окне истории промпта (prompt.MAX_RECENT реплик): старые уходят, новые остаются
 function T.test_closed_turns_window_is_bounded()
   t.eq(prompt.MAX_RECENT, 40, "окно истории промпта")
