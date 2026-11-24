@@ -399,11 +399,8 @@ end
 -- запасные, без имени (виджет такую карту и не открывает: Diary:openMap)
 function Controller:map()
   if not self:_data_ok() then return mapdata.of(nil, nil, nil) end
-  local ok, view, row, parts = pcall(self._current, self)
-  if not ok then
-    self:_log("riddle: map data failed: " .. tostring(view))
-    return mapdata.of(nil, nil, nil)
-  end
+  local ok, view, row, parts = self:_map_persona()
+  if not ok then return mapdata.of(nil, nil, nil) end
   local got, owner = pcall(self.owner_name, self)
   if not got then
     -- без текста ошибки: в нём может оказаться имя (спека карты, решение 3 от 2026-11-16 — имя владельца в лог не пишется)
@@ -411,6 +408,16 @@ function Controller:map()
     owner = nil
   end
   return mapdata.of(view, row, parts, owner)
+end
+
+-- персона карты (_current) без печати и без имени владельца -> true, view, row, parts | false (сбой в лог). Её читают
+-- карта (Controller:map, при открытой печати) и чтение страницы на карте (map_read_job: закрывашка нужна и при
+-- закрытой — карта, открытая при открытой печати, закрывается фразой и после простоя без таймера)
+function Controller:_map_persona()
+  local ok, view, row, parts = pcall(self._current, self)
+  if ok then return true, view, row, parts end
+  self:_log("riddle: map data failed: " .. tostring(view))
+  return false
 end
 
 -- имя, которым владелец представился дневнику текущей персоны (книга с именем на карте: срез 13а) | nil — не
@@ -1259,9 +1266,11 @@ end
 
 -- страница на открытой карте (не роза) -> задание чтения (prompt.map_read: без образа и памяти, пустой reply не
 -- «запасной») | nil: закрывашки нет (персона без раздела map — закрывает только роза), случайное касание, сбой.
--- Ответ — тот же finish (_map_answer). Есть ли связь, решает виджет: без сети задание не строится
+-- Ответ — тот же finish (_map_answer). Есть ли связь, решает виджет: без сети задание не строится. Закрывашка — из
+-- персоны карты и при закрытой печати (_map_persona): в запрос идёт только фраза, имя владельца не читается
 function Controller:map_read_job(png_path)
-  local map = self:map()
+  local _, view, row, parts = self:_map_persona()
+  local map = mapdata.of(view, row, parts)
   if not map.close then
     pcall(self.deps.remove, png_path)
     self:_log("riddle: map read skipped (no phrase)")

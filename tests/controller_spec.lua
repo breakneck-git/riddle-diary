@@ -797,6 +797,22 @@ function T.test_closed_seal_map_has_no_data()
   t.eq(env.ctrl:map().owner, "Гарри", "при открытой — есть")
 end
 
+-- страница на открытой карте при закрытой печати (простой истёк без таймера): задание чтения строится — закрывашка
+-- персоны нужна, чтобы фраза закрыла карту; имя владельца при этом не читается, и данные карты по-прежнему запасные
+function T.test_closed_seal_map_read_job()
+  local env = data_env()
+  local owner_reads = 0
+  env.ctrl.owner_name = function() owner_reads = owner_reads + 1 return "Гарри" end
+  local job = env.ctrl:map_read_job(PNG)
+  t.ok(job and job.run, "задание чтения есть")
+  t.ok(not has(json.encode(job.messages), "Гарри"), "имени в запросе нет")
+  t.eq(owner_reads, 0, "имя владельца не читалось")
+  local _, action = env.ctrl:finish(job, { result = { read = "Шалость удалась", reply = "", map = "close" } })
+  t.eq(action, "map", "фраза закрывает карту")
+  t.eq(env.ctrl:map().owner, nil, "данные карты при закрытой — запасные")
+  t.ok(not env.ctrl.seal_open)
+end
+
 -- связность закрытой печати хранится в окне истории промпта (prompt.MAX_RECENT реплик): старые уходят, новые остаются
 function T.test_closed_turns_window_is_bounded()
   t.eq(prompt.MAX_RECENT, 40, "окно истории промпта")

@@ -2315,6 +2315,27 @@ function T.test_map_phrase_closes()
   t.ok(d.map, "ответ закрытой карты новую не закрывает")
 end
 
+-- карта открыта, настенные часы прыгнули за срок простоя (таймер печати идёт по монотонным и ещё далёк): печать
+-- закрыта, но фраза закрытия по-прежнему закрывает карту — закрывашка персоны не данные на карте
+function T.test_map_phrase_closes_after_clock_jump()
+  local d = phrase_diary()
+  local wall = 1000
+  d.controller = ctl(stand.rules({ key = true, minutes = 1 }), { now = function() return wall end,
+    memory = phrase_memory(d.added), log = function(msg) LOG[#LOG + 1] = msg end })
+  d.controller:seal_toggle()
+  d:openMap("rose")
+  t.ok(d.map, "карта открыта")
+  wall = 1000 + 2 * 3600
+  draw(d, F.cross_only)
+  run(Diary.CFG.idle_s + 0.5)
+  t.ok(not d.controller.seal_open, "простой истёк — печать закрыта")
+  t.eq(count("riddle: map read skipped (no phrase)"), 0)
+  t.eq(d.runner.started, 1, "страница карты ушла на чтение")
+  d.runner:done({ result = { read = "Шалость удалась", reply = "", map = "close" } })
+  t.eq(d.map, nil, "фраза закрыла карту")
+  t.eq(count("riddle: map close (phrase)"), 1)
+end
+
 -- без сети фраза карту не закрывает: модель не зовётся, карта открыта (закрывают роза и автозакрытие)
 function T.test_map_offline_phrase_does_not_close()
   local d = phrase_diary()
