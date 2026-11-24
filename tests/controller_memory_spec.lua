@@ -1,5 +1,6 @@
 require("sqlite_shim")
 local t = require("t")
+local stand = require("seal_stand")
 local json = require("dkjson")
 local memory = require("riddle.memory")
 local controller = require("riddle.controller")
@@ -33,7 +34,8 @@ local function make(path)
   local env = { path = path, now = 0, script = {}, calls = {}, files = { [PNG] = "PNGBYTES" }, mtimes = {} }
   env.mem = memory.open(path)
   env.ctrl = controller.new({
-    cfg = { whose = WHOSE, password_variants = { "salandusa" }, hint_every = 3 },
+    -- печать по ключу, сон её закрывает
+    cfg = { whose = WHOSE, seal = stand.rules({ key = true, on_sleep = true }) },
     memory = env.mem,
     llm_call = function(messages, want_json)
       env.calls[#env.calls + 1] = { messages = messages, want_json = want_json }
@@ -58,8 +60,7 @@ function T.test_full_evening()
   env.mtimes[LORE] = 5
 
   -- вечер 1: печать снята, две реплики
-  env:say("Salandusa", "x")
-  env.ctrl:on_page(PNG)
+  env.ctrl:seal_toggle()
   env.ctrl:on_unlocked_followup()
   env.now = 60
   env:say("Мне грустно", "Я с тобой")
@@ -74,8 +75,7 @@ function T.test_full_evening()
   -- сон, возвращение через 5 ч: новая сессия, пересказ прошлой
   env.ctrl:on_sleep()
   env.now = 5 * H + 120
-  env:say("Salandusa", "x")
-  env.ctrl:on_page(PNG)
+  env.ctrl:seal_toggle()
   env.script = { { text = "ПЕРЕСКАЗ-ВЕЧЕРА" } }
   env.ctrl:on_unlocked_followup()
   local sum_call = env.calls[#env.calls]
@@ -97,8 +97,7 @@ function T.test_old_event_db_diary_opens()
   conn:close()
   local env = make(path)
   env.now = 10
-  env:say("Salandusa", "x")
-  env.ctrl:on_page(PNG)
+  env.ctrl:seal_toggle()
   t.ok(env.ctrl.seal_open, "печать снята")
   env:say("Сезам", "Ответ дневника")
   t.eq(env.ctrl:on_page(PNG), "Ответ дневника", "бывшее слово ключа — обычная запись")
@@ -119,7 +118,7 @@ local function make_open(tctx, path, extra)
   local env = { now = 0, script = {}, calls = {}, logs = {}, path = path or os.tmpname() }
   env.mem = memory.open(env.path)
   env.ctrl = controller.new({
-    cfg = { whose = WHOSE },
+    cfg = { whose = WHOSE, seal = stand.none() },
     memory = env.mem,
     llm_call = function(messages, want_json)
       env.calls[#env.calls + 1] = { messages = messages, want_json = want_json }
@@ -1192,8 +1191,7 @@ local function sealed_days(bad)
     local gen0 = n.gen
     env.ctrl:on_sleep()
     env.now = (day - 1) * 24 * H
-    env:say("Salandusa", "x")
-    env.ctrl:on_page(PNG)
+    env.ctrl:seal_toggle()
     t.ok(env.ctrl.seal_open, "день " .. day .. ": печать снята")
     chain(true) -- хвост разблокировки
     for i = 1, 5 do
@@ -1248,8 +1246,7 @@ function T.test_map_next_not_left_over_when_seal_closed_before_the_summary_resul
   local function unlock(now, asleep) -- asleep: печать уже закрыта сном посреди хвоста, второго сна нет
     if not asleep then env.ctrl:on_sleep() end
     env.now = now
-    env:say("Salandusa", "x")
-    env.ctrl:on_page(PNG)
+    env.ctrl:seal_toggle()
     t.ok(env.ctrl.seal_open, "печать снята")
     env.now = now + 60
     env:say("Запись", "Ответ") -- страница после разблокировки: её реплики и есть сессия

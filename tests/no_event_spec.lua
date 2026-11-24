@@ -247,7 +247,7 @@ function T.test_prompts_diary_speaks_masculine()
   end
 end
 
--- слово печати и стихи-подсказки живут только в конфиге (cfg.password_variants, cfg.hints)
+-- подсказок печати в коде нет: печать — графический ключ, слова и стихов-подсказок больше нет
 function T.test_seal_texts_only_in_config()
   t.eq(require("riddle.texts").hints, nil, "texts.hints")
 end

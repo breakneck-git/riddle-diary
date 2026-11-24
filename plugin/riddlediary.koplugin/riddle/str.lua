@@ -68,6 +68,34 @@ function str.codepoints(s)
   return out
 end
 
+-- нижний регистр, ё → е; nil — не буква латиницы или кириллицы
+local function fold(cp)
+  if cp >= 0x41 and cp <= 0x5A then return cp + 0x20 end -- A-Z
+  if cp >= 0x61 and cp <= 0x7A then return cp end         -- a-z
+  if cp == 0x401 or cp == 0x451 then return 0x435 end     -- Ё ё → е
+  if cp >= 0x410 and cp <= 0x42F then return cp + 0x20 end -- А-Я
+  if cp >= 0x430 and cp <= 0x44F then return cp end       -- а-я
+  return nil
+end
+
+-- кодпойнт → UTF-8 (в LuaJIT нет utf8.char); хватает BMP
+local function encode(cp)
+  if cp < 0x80 then return string.char(cp) end
+  if cp < 0x800 then
+    return string.char(0xC0 + math.floor(cp / 64), 0x80 + cp % 64)
+  end
+  return string.char(0xE0 + math.floor(cp / 4096), 0x80 + math.floor(cp / 64) % 64, 0x80 + cp % 64)
+end
+
+-- нижний регистр латиницы и кириллицы, ё → е; прочие знаки — как есть, байт в байт. ё → е менять нельзя: так
+-- построен ключ персоны в базе (persona.key, UNIQUE)
+function str.lower(s)
+  return (s:gsub("[%z\1-\127\194-\244][\128-\191]*", function(ch)
+    local f = fold(str.codepoints(ch)[1])
+    return f and encode(f) or ch
+  end))
+end
+
 -- форма существительного по целому n ≥ 0 (единственное правило склонения): 1, 21, 101 — one; 2–4, 22–24 — few;
 -- 0, 5–20, 11–14 в конце сотни — many
 function str.plural(n, one, few, many)

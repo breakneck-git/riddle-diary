@@ -5,7 +5,6 @@ local json = require("dkjson")
 local llm = require("riddle.llm")
 local mapdata = require("riddle.mapdata")
 local prompt = require("riddle.prompt")
-local seal = require("riddle.seal")
 local str = require("riddle.str")
 local terrain = require("riddle.terrain")
 local texts = require("riddle.texts")
@@ -30,11 +29,11 @@ persona.DEFAULT_TITLE = "Дневник / Diary"
 -- сменила бы ключ персоны, сохранённой со строкой с U+00A0, и её память стала бы недоступна
 function persona.key(line)
   local s = str.trim(line):gsub("%s+", " ")
-  return seal.lower(s)
+  return str.lower(s)
 end
 
 -- «Методы» — маркер мира и маркер героя вместе: «Том Реддл» без мира — канон Роулинг, другой персонаж.
--- Точное вхождение в нижнем регистре, не нечёткое seal.matches: строка напечатана, а нечёткий поиск принимал
+-- Точное вхождение в нижнем регистре, не нечёткий поиск: строка напечатана, а нечёткий принимал
 -- «национального» за «рационального» (одна правка)
 local WORLD = { "рациональн", "hpmor", "rationality" }
 local HERO = { "реддл", "волдеморт", "riddle", "voldemort" }
@@ -52,7 +51,7 @@ function persona.lang_of(line)
 end
 
 function persona.is_methods(line)
-  local s = seal.lower(line)
+  local s = str.lower(line)
   return any_in(s, WORLD) and any_in(s, HERO)
 end
 

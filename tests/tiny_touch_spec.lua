@@ -3,6 +3,7 @@
 -- не уходит — ни фразы-раздумья, ни ответа, inflight не растёт, во время раздумья это не отказ.
 -- Одна узкая сторона (тире) — как прежде: дополнение до 32 и в модель. Харнес — как ponder_spec.lua.
 local t = require("t")
+local stand = require("seal_stand")
 local texts = require("riddle.texts")
 local controller = require("riddle.controller")
 
@@ -92,7 +93,7 @@ end
 
 local function ctl(cfg)
   return controller.new{
-    cfg = cfg or { password_variants = { "salandusa" } },
+    cfg = cfg or { seal = stand.key() },
     -- открытая печать собирает контекст и пишет реплики: память без базы
     memory = { use_persona = function() return true end, session = function() return 1 end, summaries = function() return {} end,
                lore_text = function() return "" end, recent = function() return {} end, add = nop,
@@ -312,7 +313,7 @@ end
 -- 4.2 синхронный путь Diary:respond: касание (nil из on_page) не тратит хвост разблокировки —
 -- он ждёт настоящего ответа
 function T.test_sync_respond_nil_keeps_followup()
-  local d = diary({})                      -- печати нет: хвост положен с самого начала
+  local d = diary({ seal = stand.none() })  -- печати нет: хвост положен с самого начала
   d.runner = nil
   local f = assert(io.open("tests/fixtures/png/b2_13x9_dynamic.png", "rb"))
   local bytes = f:read("*a")

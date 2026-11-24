@@ -46,14 +46,6 @@ local function fail_pool(err)
   return kind and ("fail_" .. kind) or "fail_other"
 end
 
--- печать настроена, если в конфиге есть хоть одно непустое слово
-local function has_password(variants)
-  for _, v in ipairs(variants or {}) do
-    if type(v) == "string" and v ~= "" then return true end
-  end
-  return false
-end
-
 -- запись прочитана: read не пуст и не "?". Одно правило для ответа, страницы настройки (setup) и ответа на вопрос
 -- о строке: нечитаемое не должно ни записываться, ни отвергать строку
 function Controller.readable(result)
@@ -70,8 +62,7 @@ end
 function Controller.new(deps)
   local self = {
     deps = deps,
-    seal = seal.new(deps.cfg.password_variants or {}, deps.cfg.hint_every, deps.cfg.hints),
-    sealed = has_password(deps.cfg.password_variants) or deps.cfg.seal_invalid == true,
+    seal = seal.new(deps.cfg.seal),
     bags = {},
     pools = {}, -- сгенерированные наборы фраз: "id:name" -> { src, list } (Controller:texts)
   }
@@ -82,14 +73,13 @@ function Controller.new(deps)
     end,
   })
   self.pending = self:_load_pending()
-  if deps.cfg.seal_invalid then
-    -- битое слово в конфиге: печать закрыта, как без этой возможности, — опечатка дневник не открывает
-    self:_log("riddle: seal config invalid")
-  elseif not self.sealed then
+  if self.seal.invalid then
+    -- битые правила в конфиге: печать закрыта и ключом не открывается — опечатка дневник не открывает
+    self:_log("riddle: seal config invalid: " .. self.seal.invalid)
+  elseif not self.seal.configured then
     -- печати нет: дневник открыт сразу, разблокировки не будет — хвост (лор, пересказ) положен с старта
-    self.seal.open = true
     self.followup_due = true
-    self:_log("riddle: seal off (no password in config)")
+    self:_log(deps.cfg.seal.off and "riddle: seal off by flag" or "riddle: seal off (no rules in config)")
   end
   return self
 end
@@ -515,7 +505,7 @@ function Controller:opening_text()
   -- чистая страница — как новая: строка конфига читается заново. Иначе сбой чтения до сна держал бы её действующей
   -- до первой записи, и отвергнутая строка давала бы приветствие вместо «Чей это дневник?»
   self:_config_changed()
-  if not self.sealed then
+  if not self.seal.configured then
     -- строки нет вовсе: «Чей это дневник?» (задача 8); ответ уже прочитан и ждёт «да» — тот же вопрос с миром
     if self:_asking() then return self:_ask_open() end
     -- строка без мира в конфиге: вместо приветствия — вопрос о ней (задача 7); следующая запись — ответ на него
@@ -590,7 +580,7 @@ function Controller:_open_context(sid, parts)
     knowledge = knowledge,
     tasks = tasks_ctx and tasks_ctx.block,
     titles = tasks_ctx and tasks_ctx.titles,
-    sealed = self.sealed, -- печати нет — промпт о ней молчит
+    sealed = self.seal.configured, -- печати нет — промпт о ней молчит
   }, tasks_ctx
 end
 
@@ -844,7 +834,7 @@ function Controller:_begin(png_path, with_run)
       return { mode = "setup", stage = "gen", sid = deps.memory:session(deps.now()), messages = prompt.setup(png_b64) }
     end
     if self.seal.open then
-      if not self.sealed and self.followup_due then pcall(self._sync_lore, self) end -- лор — к ответам до начала хвоста старта
+      if not self.seal.configured and self.followup_due then pcall(self._sync_lore, self) end -- лор — к ответам до начала хвоста старта
       local sid = deps.memory:session(deps.now())
       local t0 = deps.clock and deps.clock()
       local ctx, tasks_ctx = self:_open_context(sid, parts)
@@ -1017,27 +1007,38 @@ function Controller:_answer(job, result, err)
     return reply
   end
 
-  local step = self.seal:feed(result.read)
-  -- что написано на странице, в лог Kindle не идёт: текст read — только в devmode, иначе длина
+  -- закрытая печать: ответ модели по закрытому промпту (задача 3 заменит его общим). Что написано на странице,
+  -- в лог Kindle не идёт: текст read — только в devmode, иначе длина
   local read = tostring(result.read)
   local shown = deps.devmode and string.format('"%s"', (read:gsub("\n", "\\n")))
     or string.format("%d chars", str.utf8_len(read))
-  self:_log(string.format("riddle: seal read %s -> %s via %s", shown, step.kind, tostring(result.via or "?")))
-  if step.kind == "unlock" then
-    local welcome = self:_pick(self:texts("welcomes"))
-    -- строка ждёт ответа: вопрос идёт вместе с приветствием (закрытая страница показывала приглашение)
-    local ask = self:_pending_ask()
-    if ask then
-      self.asked = ask
-      return welcome .. " " .. ask
-    end
-    -- строки нет вовсе: после слова — вопрос «Чей это дневник?» (решение 7 плана)
-    if self:_asking() then return welcome .. " " .. self:_ask_open() end
-    return welcome
-  end
-  if step.kind == "hint" then return step.hint end
-  if step.kind == "refuse" and result.reply and result.reply ~= "" then return result.reply end
+  self:_log(string.format("riddle: locked read %s via %s", shown, tostring(result.via or "?")))
+  if Controller.usable(result) then return result.reply end
   return self:_pick(self:texts("unreadable"))
+end
+
+-- ключ узнан (задача 6): закрытую печать открывает приветствием, открытую закрывает фразой texts.seal_closed.
+-- Модель не зовётся, в память ничего. -> текст | nil: печать не сдвинулась (её нет или конфиг битый)
+function Controller:seal_toggle()
+  local s = self.seal
+  if not s.configured then return nil end
+  if s.open then
+    s:lock("key")
+    self:_log("riddle: seal closed by key")
+    return texts.seal_closed
+  end
+  if not s:unlock(self.deps.now()) then return nil end
+  self:_log("riddle: seal opened by key")
+  local welcome = self:_pick(self:texts("welcomes"))
+  -- строка ждёт ответа: вопрос идёт вместе с приветствием (закрытая страница показывала приглашение)
+  local ask = self:_pending_ask()
+  if ask then
+    self.asked = ask
+    return welcome .. " " .. ask
+  end
+  -- строки нет вовсе: после ключа — вопрос «Чей это дневник?» (решение 7 плана)
+  if self:_asking() then return welcome .. " " .. self:_ask_open() end
+  return welcome
 end
 
 -- -> текст | nil, действие (_answer); сбой разбора — фраза сбоя (на карте — ничего: там не отвечают)
@@ -1373,7 +1374,7 @@ function Controller:take_followup(gen_only)
     if due and self.tail ~= "full" then self.tail = "gen" end
     return due
   end
-  local followup = not self.sealed and self.followup_due == true
+  local followup = not self.seal.configured and self.followup_due == true
   local roll = self.roll_due == true
   local gen = self:_gen_tail_due()
   self.roll_tail = roll and not followup and not gen
@@ -1397,11 +1398,11 @@ function Controller:on_sleep()
   self.map_hold, self.map_next = nil, nil -- после сна — новая попытка данных карты, пересказ раньше неё
   self.roll_tail = false -- хвост свёртки, не начатый до сна, — не повод для паузы у хвоста после него
   self.tail = false -- и хвост, не начатый до сна: после него хвост берётся заново
-  if not self.sealed then
+  if not self.seal.configured then
     self.followup_due = true -- закрывать нечего: открыта всегда
     return
   end
-  self.seal:lock()
+  if self.seal:closes_on_sleep() then self.seal:lock("sleep") end
 end
 
 return Controller

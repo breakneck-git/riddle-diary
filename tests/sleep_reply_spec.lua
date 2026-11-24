@@ -66,7 +66,7 @@ end
 local function diary(sealed)
   clock, timeline, LOG, FREED = 0, {}, {}, 0
   local ctl
-  if sealed ~= nil then ctl = { sealed = sealed, on_sleep = function(self) self.slept = true end } end
+  if sealed ~= nil then ctl = { seal = { configured = sealed }, on_sleep = function(self) self.slept = true end } end
   local d = setmetatable({
     canvas = bb_stub, tasks = {}, queue = {}, inflight = 0, strokes = {}, epoch = 0, w = 758, h = 1024,
     prompt = { rect = { x = 0, y = 0, w = 0, h = 0 } },

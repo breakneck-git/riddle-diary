@@ -4,6 +4,7 @@
 -- который уже уходит, и случайное касание реплики не дают; реплика — не ответ (не в память, не в
 -- devtest). Харнес — как ponder_spec.lua, страницы пишутся настоящими penDown/penMove/penUp.
 local t = require("t")
+local stand = require("seal_stand")
 local texts = require("riddle.texts")
 local controller = require("riddle.controller")
 
@@ -93,7 +94,7 @@ end
 
 local function ctl(cfg)
   return controller.new{
-    cfg = cfg or { password_variants = { "salandusa" } },
+    cfg = cfg or { seal = stand.key() },
     -- открытая печать собирает контекст и пишет реплики: память без базы
     memory = { use_persona = function() return true end, session = function() return 1 end, summaries = function() return {} end,
                lore_text = function() return "" end, recent = function() return {} end,
@@ -344,7 +345,7 @@ end
 -- реплика — не ответ: в память сессии (история диалога и пересказ берутся из неё) идут только
 -- записи и ответы модели. Печати нет — дневник открыт и пишет память
 function T.test_interjection_not_in_memory()
-  interrupted_during("reveal", {})
+  interrupted_during("reveal", { seal = stand.none() })
   t.eq(#ADDS, 4, table.concat(ADDS, " | "))
   for _, s in ipairs(ADDS) do
     for _, x in ipairs(texts.interrupted) do t.ok(not s:find(x, 1, true), "реплика в памяти: " .. s) end

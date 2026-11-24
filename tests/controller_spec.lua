@@ -4,13 +4,12 @@ local texts = require("riddle.texts")
 local prompt = require("riddle.prompt")
 local controller = require("riddle.controller")
 local llm = require("riddle.llm")
+local config = require("riddle.config")
 
 local T = {}
 
 local PNG = "/mnt/us/riddle/samples/1.png"
 local LORE = "/mnt/us/riddle/lore.md"
-local VARIANTS = { "salandusa", "шаландуша", "шаланда" }
-local HINTS = { "ПОДСКАЗКА-ИЗ-КОНФИГА" }
 
 local function in_list(list, v)
   for _, x in ipairs(list) do if x == v then return true end end
@@ -105,7 +104,8 @@ local function make(opts)
     memory = opts.memory or fake_memory(),
   }
   local deps = {
-    cfg = opts.cfg or { password_variants = opts.variants or VARIANTS, hint_every = 3, hints = HINTS },
+    -- печать по умолчанию — по ключу; seal = false — печати нет, таблица — свои правила
+    cfg = opts.cfg or { seal = config.parse_seal(opts.seal == nil and { key = true } or opts.seal or nil) },
     memory = env.memory,
     llm_call = function(messages, want_json, call_opts)
       env.llm_calls[#env.llm_calls + 1] = { messages = messages, want_json = want_json, opts = call_opts }
@@ -151,9 +151,9 @@ local function make(opts)
     if not job then return text end
     return env.ctrl:finish(job, job.run())
   end
+  -- ключ узнан: печать открывается без вызова модели (задача 6 зовёт seal_toggle со страницы ключа)
   function env:unlock()
-    env:say("Salandusa", "что-то")
-    local text = env:page()
+    local text = env.ctrl:seal_toggle()
     t.ok(env.ctrl.seal_open, "печать должна быть снята")
     return text
   end
@@ -237,7 +237,7 @@ end
 -- сборка запроса открытой печати в родителе: время и размер — решение о кэше на устройстве;
 -- в лог только числа
 function T.test_open_begin_logs_build_time()
-  local env = make({ variants = {} })
+  local env = make({ seal = false })
   local ticks = { 1.000, 1.012 }
   env.ctrl.deps.clock = function() return table.remove(ticks, 1) or 1.012 end
   env:say("кто ты", "Нет.")
@@ -257,45 +257,34 @@ end
 
 -- касание не съедает хвост разблокировки (без печати он ждёт первого настоящего ответа)
 function T.test_tiny_png_keeps_followup_without_seal()
-  local env = make({ variants = {} })
+  local env = make({ seal = false })
   env.files[PNG] = fixture("rgb5x5_dynamic.png")
   t.eq(env.ctrl:on_page(PNG), nil)
   t.ok(env.ctrl:take_followup(), "хвост остался")
 end
 
--- закрытая печать: что прочла модель и что решила печать — в лог (диагностика пароля);
--- текст read — только в devmode, иначе в лог Kindle попадает всё, что написано на странице
-function T.test_locked_logs_seal_read_kind_provider_in_devmode()
+-- закрытая печать: что прочла модель и через кого — в лог; текст read — только в devmode, иначе в лог Kindle
+-- попадает всё, что написано на странице
+function T.test_locked_logs_read_and_provider_in_devmode()
   local env = make({ devmode = true })
-  env.script[1] = { read = "шалонда\nвот", reply = "Нет.", via = "gemini" }
+  env.script[1] = { read = "кто ты\nвот", reply = "Нет.", via = "gemini" }
   env:page()
-  t.ok(env.logs[1] and has(env.logs[1], 'riddle: seal read "шалонда\\nвот" -> unlock via gemini'),
+  t.ok(env.logs[1] and has(env.logs[1], 'riddle: locked read "кто ты\\nвот" via gemini'),
     table.concat(env.logs, "\n"))
-  local env2 = make({ devmode = true })
-  env2:say("кто ты", "Нет.")
-  env2:page()
-  t.ok(env2.logs[1] and has(env2.logs[1], 'riddle: seal read "кто ты" -> refuse via ?'),
-    table.concat(env2.logs, "\n"))
 end
 
 function T.test_locked_log_without_devmode_has_length_not_text()
   local env = make()
-  env.script[1] = { read = "шалонда\nвот", reply = "Нет.", via = "gemini" }
+  env.script[1] = { read = "кто ты\nвот", reply = "Нет.", via = "gemini" }
   env:page()
-  t.ok(env.logs[1] and has(env.logs[1], "riddle: seal read 11 chars -> unlock via gemini"),
+  t.ok(env.logs[1] and has(env.logs[1], "riddle: locked read 10 chars via gemini"),
     table.concat(env.logs, "\n"))
   for _, l in ipairs(env.logs) do
-    t.ok(not has(l, "шалонда") and not has(l, "вот"), "текст read не в логе: " .. l)
+    t.ok(not has(l, "кто ты") and not has(l, "вот"), "текст read не в логе: " .. l)
   end
-  local env2 = make()
-  env2:say("кто ты", "Нет.")
-  env2:page()
-  t.ok(env2.logs[1] and has(env2.logs[1], "riddle: seal read 6 chars -> refuse via ?"),
-    table.concat(env2.logs, "\n"))
-  t.ok(not has(env2.logs[1], "кто ты"), "текст read не в логе")
 end
 
--- на открытой печати строки seal read нет; без devmode нет и текста read: в лог Kindle не идёт написанное
+-- на открытой печати строки locked read нет; без devmode нет и текста read: в лог Kindle не идёт написанное
 function T.test_open_seal_does_not_log_read()
   for _, devmode in ipairs({ false, true }) do
     local env = make({ devmode = devmode })
@@ -304,7 +293,7 @@ function T.test_open_seal_does_not_log_read()
     env:say("секретные слова дианы", "Ответ.")
     env:page()
     for _, l in ipairs(env.logs) do
-      t.ok(not has(l, "seal read"), "на открытой печати нет строки seal read: " .. l)
+      t.ok(not has(l, "locked read"), "на открытой печати нет строки locked read: " .. l)
       if not devmode then t.ok(not has(l, "секретные слова"), "текст read не в логе: " .. l) end
     end
   end
@@ -346,25 +335,43 @@ function T.test_open_seal_without_devmode_has_no_open_read_line()
   end
 end
 
-function T.test_locked_hint_on_third()
+-- ключ: первый вызов открывает с приветствием, второй закрывает фразой; модель не зовётся, в память ничего
+function T.test_toggle_welcome_then_close()
   local env = make()
-  for i = 1, 2 do
-    env:say("кто ты", "отказ " .. i)
-    t.eq(env:page(), "отказ " .. i)
-  end
-  env:say("кто ты", "отказ 3")
-  t.eq(env:page(), HINTS[1], "третья неудача -> подсказка из конфига, не ответ модели")
-  t.eq(#env.memory.adds, 0)
+  t.ok(not env.ctrl.seal_open)
+  local text = env.ctrl:seal_toggle()
+  t.ok(in_list(texts.welcomes, text), tostring(text))
+  t.ok(env.ctrl.seal_open)
+  t.eq(env.ctrl:seal_toggle(), texts.seal_closed)
+  t.ok(not env.ctrl.seal_open)
+  t.eq(#env.llm_calls, 0, "ключ не зовёт модель")
+  t.eq(#env.memory.adds, 0, "ключ не пишется в память")
+  t.ok(logged(env, "riddle: seal opened by key") and logged(env, "riddle: seal closed by key"),
+    table.concat(env.logs, "\n"))
 end
 
-function T.test_unlock_no_llm_reply()
+function T.test_seal_closed_text()
+  t.eq(texts.seal_closed, "Печать легла. Страницы молчат.")
+end
+
+-- печати нет или конфиг битый — ключ печать не сдвигает
+function T.test_toggle_without_seal_or_invalid_is_noop()
+  local env = make({ seal = false })
+  t.eq(env.ctrl:seal_toggle(), nil)
+  t.ok(env.ctrl.seal_open, "печати нет — открыт")
+  local bad = make({ seal = { minutes = 5 } })
+  t.eq(bad.ctrl:seal_toggle(), nil)
+  t.ok(not bad.ctrl.seal_open, "битая печать ключом не открывается")
+  t.ok(logged(bad, "riddle: seal config invalid: close rule without key"), table.concat(bad.logs, "\n"))
+end
+
+-- открытие ключом при ждущем вопросе о строке: вопрос идёт вместе с приветствием
+function T.test_toggle_welcome_carries_pending_question()
   local env = make()
-  env:say("Salandusa", "СЕКРЕТНЫЙ-ОТВЕТ-МОДЕЛИ")
-  local text = env:page()
-  t.eq(text, texts.welcomes[1], "только приветствие")
-  t.ok(not has(text, "СЕКРЕТНЫЙ"), "reply модели не показан")
-  t.ok(env.ctrl.seal_open)
-  t.eq(#env.memory.adds, 0, "слово не пишется в память")
+  env.ctrl._pending_ask = function() return "ВОПРОС?" end
+  local text = env.ctrl:seal_toggle()
+  t.ok(has(text, " ВОПРОС?"), text)
+  t.eq(env.ctrl.asked, "ВОПРОС?")
 end
 
 function T.test_unreadable_closed()
@@ -373,10 +380,9 @@ function T.test_unreadable_closed()
   local text = env:page()
   t.ok(in_list(texts.unreadable, text), text)
   t.eq(#env.memory.adds, 0)
-  -- нераспознанное не считается неудачей: три "?" и потом две неудачи — подсказки ещё нет
-  for _ = 1, 2 do env:say("?", ""); env:page() end
+  -- закрытая печать показывает ответ модели (до задачи 3 — по закрытому промпту); слово больше ничего не снимает
   env:say("кто ты", "а"); t.eq(env:page(), "а")
-  env:say("кто ты", "б"); t.eq(env:page(), "б")
+  t.ok(not env.ctrl.seal_open)
 end
 
 function T.test_all_providers_fail_closed()
@@ -404,7 +410,7 @@ function T.test_open_writes_memory()
   t.eq(env.memory.adds[2].text, "Я с тобой")
   t.eq(env.memory.adds[1].sid, env.memory.adds[2].sid)
 
-  local first = env.llm_calls[2]
+  local first = env.llm_calls[1]
   t.ok(not is_locked_call(first), "открытая печать — другой промпт")
   t.eq(first.want_json, true)
   local s1 = json.encode(first.messages)
@@ -415,14 +421,14 @@ function T.test_open_writes_memory()
   -- следующая запись видит прошлые реплики как диалог
   env:say("Расскажи мне сказку", "Жила-была…")
   env:page()
-  local s2 = json.encode(env.llm_calls[3].messages)
+  local s2 = json.encode(env.llm_calls[2].messages)
   t.ok(has(s2, "Мне грустно") and has(s2, "Я с тобой"), "recent в промпте")
   t.eq(#env.memory.adds, 4)
 end
 
 -- окно истории контроллера — то же, что у промпта (prompt.MAX_RECENT = 40): 40 реплик доходят, 41-я — нет
 function T.test_open_history_window_40()
-  local env = make({ cfg = {} }) -- печати нет: открыт сразу
+  local env = make({ seal = false }) -- печати нет: открыт сразу
   env:say("Привет", "Здравствуй")
   env:page()
   for i = 1, 45 do
@@ -444,7 +450,7 @@ function T.test_open_drops_empty_summaries()
   env:unlock()
   env:say("привет", "здравствуй")
   env:page()
-  local s = json.encode(env.llm_calls[2].messages)
+  local s = json.encode(env.llm_calls[1].messages)
   t.ok(has(s, "НАСТОЯЩИЙ-ПЕРЕСКАЗ"))
   t.ok(not has(s, "- \\n") and not has(s, '- "'), "пустого пересказа в промпте нет")
 end
@@ -492,20 +498,12 @@ function T.test_open_page_extra_arg_ignored()
   t.eq(#env.llm_calls, calls + 1)
 end
 
--- закрытая печать: прочитанное слово идёт в seal:feed и при пустом reply (решение оркестратора)
-function T.test_locked_empty_reply_still_feeds_seal()
+-- закрытая печать: пустой reply — «не разобрала», печать по-прежнему закрыта
+function T.test_locked_empty_reply_is_unreadable()
   local env = make()
-  env:say("Salandusa", "")
-  t.eq(env:page(), texts.welcomes[1], "слово снимает печать и без reply")
-  t.ok(env.ctrl.seal_open)
-
-  env = make()
-  for _ = 1, 2 do
-    env:say("кто ты", "")
-    t.ok(in_list(texts.unreadable, env:page()), "пустой отказ — «не разобрала»")
-  end
   env:say("кто ты", "")
-  t.eq(env:page(), HINTS[1], "попытки с пустым reply засчитываются: третья — подсказка")
+  t.ok(in_list(texts.unreadable, env:page()), "пустой отказ — «не разобрала»")
+  t.ok(not env.ctrl.seal_open)
 end
 
 function T.test_all_providers_fail_open()
@@ -568,7 +566,6 @@ end
 function T.test_png_always_removed()
   local scenarios = {
     closed_refuse = function(env) env:say("кто ты", "отказ") end,
-    closed_unlock = function(env) env:say("Salandusa", "x") end,
     closed_unreadable = function(env) env:say("?", "") end,
     closed_fail = function(env) env.script = { { fail = "budget" } } end,
     llm_throws = function(env) env.script = { { throw = "boom" } } end,
@@ -624,16 +621,16 @@ function T.test_memory_error_does_not_crash()
   env:say("привет", "здравствуй")
   local text = env:page()
   t.ok(type(text) == "string" and #text > 0)
-  t.eq(#env.removed, 2, "обе страницы — по одному remove")
+  t.eq(#env.removed, 1, "страница — один remove")
 end
 
--- печать необязательна: слова в конфиге нет — дневник открыт сразу (владелец 2026-10-25) -------------
+-- печать необязательна: правил в конфиге нет — дневник открыт сразу (владелец 2026-10-25) -------------
 
 function T.test_no_password_diary_is_open_at_once()
-  local env = make({ variants = {} })
+  local env = make({ seal = false })
   t.ok(env.ctrl.seal_open, "печати нет: открыт до первой страницы")
-  t.ok(not env.ctrl.sealed, "печать не настроена")
-  t.ok(logged(env, "riddle: seal off (no password in config)"), table.concat(env.logs, "\n"))
+  t.ok(not env.ctrl.seal.configured, "печать не настроена")
+  t.ok(logged(env, "riddle: seal off (no rules in config)"), table.concat(env.logs, "\n"))
   env:say("привет", "здравствуй")
   t.eq(env:page(), "здравствуй", "ответ — обычный, не приветствие")
   t.eq(#env.llm_calls, 1)
@@ -641,20 +638,35 @@ function T.test_no_password_diary_is_open_at_once()
   t.eq(#env.memory.adds, 2, "страница и ответ — в память")
 end
 
-function T.test_empty_password_strings_mean_no_seal()
-  local env = make({ variants = { "", "" } })
-  t.ok(env.ctrl.seal_open and not env.ctrl.sealed, "все варианты пустые — печати нет")
+-- флаг off: печати нет, в лог — что сняла её строка конфига
+function T.test_off_flag_means_no_seal()
+  local env = make({ seal = { key = true, off = true } })
+  t.ok(env.ctrl.seal_open and not env.ctrl.seal.configured, "off — печати нет")
+  t.ok(logged(env, "riddle: seal off by flag"), table.concat(env.logs, "\n"))
 end
 
-function T.test_password_set_keeps_seal()
+function T.test_rules_keep_seal()
   local env = make()
-  t.ok(env.ctrl.sealed, "слово есть — печать есть")
+  t.ok(env.ctrl.seal.configured, "правило есть — печать есть")
   t.ok(not env.ctrl.seal_open)
   t.ok(not logged(env, "seal off"), "строки «seal off» нет")
 end
 
+-- битый конфиг печати: закрыта, в лог причина, ключ не открывает (test_toggle_without_seal_or_invalid_is_noop)
+function T.test_invalid_seal_config_keeps_seal_closed()
+  local path = os.tmpname()
+  local f = assert(io.open(path, "w"))
+  f:write("return { gemini_key = ")
+  f:close()
+  local env = make({ cfg = config.load(path) })
+  os.remove(path)
+  t.ok(env.ctrl.seal.configured and not env.ctrl.seal_open, "файл не загрузился — закрыта")
+  t.ok(logged(env, "riddle: seal config invalid: "), table.concat(env.logs, "\n"))
+  t.ok(not logged(env, "seal off"))
+end
+
 function T.test_no_password_sleep_does_not_close()
-  local env = make({ variants = {} })
+  local env = make({ seal = false })
   env.ctrl:on_sleep()
   t.ok(env.ctrl.seal_open, "закрывать нечего")
   env:say("привет", "здравствуй")
@@ -665,7 +677,7 @@ end
 -- без разблокировки нет и «после приветствия»: хвост (лор, пересказ) — после первого ответа,
 -- и снова после сна. Повод гасит начало хвоста, не взятие: не начатый хвост берётся снова
 function T.test_no_password_followup_due_after_start_and_sleep()
-  local env = make({ variants = {} })
+  local env = make({ seal = false })
   t.ok(env.ctrl:take_followup(), "после старта хвост положен")
   t.ok(env.ctrl:take_followup(), "хвост не начался — повод остаётся")
   env.ctrl:on_unlocked_followup()
@@ -682,28 +694,29 @@ end
 
 -- сон -----------------------------------------------------------------------
 
+-- сон закрывает печать только по правилу on_sleep (spec §6)
 function T.test_sleep_locks()
-  local env = make()
+  local env = make({ seal = { key = true, on_sleep = true } })
   env:unlock()
   env:say("привет", "здравствуй")
   env:page()
-  t.ok(not is_locked_call(env.llm_calls[2]))
+  t.ok(not is_locked_call(env.llm_calls[1]))
   env.ctrl:on_sleep()
   t.ok(not env.ctrl.seal_open)
   env:say("кто ты", "закрыто")
   t.eq(env:page(), "закрыто")
-  t.ok(is_locked_call(env.llm_calls[3]), "после сна запрос идёт через prompt.locked")
+  t.ok(is_locked_call(env.llm_calls[2]), "после сна запрос идёт через prompt.locked")
 end
 
-function T.test_sleep_resets_hint_counter()
+function T.test_sleep_without_on_sleep_keeps_seal_open()
   local env = make()
-  for _ = 1, 2 do env:say("кто ты", "отказ"); env:page() end
+  env:unlock()
   env.ctrl:on_sleep()
-  env:say("кто ты", "отказ"); t.eq(env:page(), "отказ", "счётчик сброшен: это 1-я неудача")
+  t.ok(env.ctrl.seal_open, "правила on_sleep нет — сон печать не закрывает")
 end
 
 function T.test_session_continues_after_sleep()
-  local env = make({ now = 0 })
+  local env = make({ now = 0, seal = { key = true, on_sleep = true } })
   env:unlock()
   env:say("первая", "ответ 1"); env:page()
   env.ctrl:on_sleep()
@@ -900,9 +913,9 @@ end
 
 function T.test_begin_finish_equals_on_page_locked()
   local a, b = both_ways(function() end,
-    { { "кто ты", "отказ 1" }, { "кто ты", "отказ 2" }, { "кто ты", "отказ 3" }, { "Salandusa", "x" } })
-  t.ok(a.logs:find("seal read", 1, true), a.logs)
-  t.eq(a.open, true)
+    { { "кто ты", "отказ 1" }, { "?", "" }, { "кто ты", "" } })
+  t.ok(a.logs:find("locked read", 1, true), a.logs)
+  t.eq(a.open, false)
   same(a, b)
 end
 
@@ -944,7 +957,7 @@ end
 
 -- печати нет: промпт открытой печати без слов о печати; печать снята — модель это знает
 function T.test_no_seal_prompt_has_no_seal()
-  local env = make({ variants = {} })
+  local env = make({ seal = false })
   env:say("привет", "здравствуй")
   env:page()
   local s = system_of(env.llm_calls[1])

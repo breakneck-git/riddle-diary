@@ -1,4 +1,5 @@
 local t = require("t")
+local stand = require("seal_stand")
 local texts = require("riddle.texts")
 local controller = require("riddle.controller")
 
@@ -110,7 +111,7 @@ local RANDOMS = {
 }
 
 local function ctrl(random)
-  return controller.new({ cfg = {}, random = random })
+  return controller.new({ cfg = { seal = stand.none() }, random = random })
 end
 
 local LISTS = { "sleepy", "unreadable", "welcomes" }
@@ -168,7 +169,7 @@ end
 function T.test_welcome_not_repeated_on_next_unlock()
   local script = {}
   local c = controller.new({
-    cfg = { password_variants = { "salandusa" } },
+    cfg = { seal = stand.key() },
     random = function() return 1 end,
     llm_call = function() return table.remove(script, 1) end,
     read_file = function() return "png" end,
@@ -176,11 +177,9 @@ function T.test_welcome_not_repeated_on_next_unlock()
     remove = function() end,
     now = function() return 0 end,
   })
-  script[1] = { read = "Salandusa", reply = "x" }
-  local w1 = c:on_page("p")
-  c:on_sleep()
-  script[1] = { read = "Salandusa", reply = "x" }
-  local w2 = c:on_page("p")
+  local w1 = c:seal_toggle()
+  c:seal_toggle() -- ключ закрыл печать
+  local w2 = c:seal_toggle()
   t.eq(w1, texts.welcomes[1])
   t.ok(w1 ~= w2, "второе приветствие другое: " .. w2)
 end

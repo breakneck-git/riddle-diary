@@ -1,7 +1,5 @@
 -- Все тексты дневника. Приглашение и первые 12 приветствий после печати — дословно из спеки, раздел «Тексты».
 -- Каждый пул без модели — от 30 вариантов (владелец 2026-10-25), проверка — tests/texts_spec.lua.
--- Подсказки печати — в конфиге (cfg.hints), не здесь.
-local seal = require("riddle.seal")
 local str = require("riddle.str")
 
 local texts = {}
@@ -290,6 +288,9 @@ texts.fail_other = {
   "Строчки сбились в узел… напиши ещё раз, я распутаю.",
 }
 
+-- ключ закрыл печать (Controller:seal_toggle)
+texts.seal_closed = "Печать легла. Страницы молчат."
+
 -- запись не разобрана (read == "?")
 texts.unreadable = {
   "Чернила расплылись… напиши ещё раз, медленнее.",
@@ -542,7 +543,7 @@ end
 -- есть ли в s слово, начинающееся с запрещённого. Сверка со списками обоих языков всегда: фраза «по-русски» с
 -- «server» или «network» внутри — тот же технический сбой (пулы «Методов» от этого не теряют ни одной фразы)
 function texts.forbidden(s)
-  local low = seal.lower(s)
+  local low = str.lower(s)
   for _, list in ipairs({ texts.FORBIDDEN.ru, texts.FORBIDDEN.en }) do
     for _, w in ipairs(list) do
       local i = 1

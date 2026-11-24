@@ -3,6 +3,7 @@
 -- уходит — на неё отказ из texts.busy. Харнес — как async_answer_spec.lua (заглушки KOReader, свои
 -- часы, поддельный runner с ручным on_done, настоящий контроллер).
 local t = require("t")
+local stand = require("seal_stand")
 local texts = require("riddle.texts")
 local controller = require("riddle.controller")
 
@@ -95,7 +96,7 @@ end
 
 local function ctl(cfg, random)
   return controller.new{
-    cfg = cfg or { password_variants = { "salandusa" } },
+    cfg = cfg or { seal = stand.key() },
     -- открытая печать собирает контекст и пишет реплики: память без базы
     memory = { use_persona = function() return true end, session = function() return 1 end, summaries = function() return {} end,
                lore_text = function() return "" end, recent = function() return {} end, add = nop,
@@ -283,7 +284,7 @@ end
 
 -- без слова в конфиге дневник открыт сразу: раздумье и отказы работают и там
 function T.test_ponder_and_refusal_without_seal()
-  local d = diary({})
+  local d = diary({ seal = stand.none() })
   t.ok(d.controller.seal_open, "печати нет")
   page_done(d)
   run(4)

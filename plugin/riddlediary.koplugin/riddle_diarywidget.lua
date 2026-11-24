@@ -761,7 +761,7 @@ function Diary:replySurvivesSleep()
     if not a then return false end
     local ctl = self.controller
     local timed = self:holdFor(a, 0) ~= nil
-    return hold.survives_sleep(ctl ~= nil and ctl.sealed ~= false, a.kind, a.phase, timed)
+    return hold.survives_sleep(ctl ~= nil and ctl.seal.configured, a.kind, a.phase, timed)
 end
 
 -- the sleep caught the reply being revealed: the rest of its glyphs go into the layer at once

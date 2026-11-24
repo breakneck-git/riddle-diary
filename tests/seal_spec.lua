@@ -1,199 +1,75 @@
 local t = require("t")
 local texts = require("riddle.texts")
 local seal = require("riddle.seal")
+local config = require("riddle.config")
 
-local V = { "salandusa", "шаландуша", "шаланда" }
-
--- подсказки приходят из конфига (cfg.hints); здесь — подставные, порядок выдачи — порядок списка
-local HINTS = { "ПОДСКАЗКА-1\nвторая строка", "ПОДСКАЗКА-2" }
-
-local function new_seal()
-  return seal.new(V, 3, HINTS)
+-- правила печати — как их отдаёт config.load (cfg.seal)
+local function new_seal(rules)
+  return seal.new(config.parse_seal(rules))
 end
 
 local T = {}
 
-function T.test_match_exact()
-  t.ok(seal.matches("Salandusa", V))
-end
-
-function T.test_match_case_spaces()
-  t.ok(seal.matches("SALAN dusa", V), "пробел и регистр")
-  t.ok(seal.matches("Шалан\nдуша", V), "перенос строки")
-end
-
-function T.test_match_homoglyphs()
-  t.ok(seal.matches("Sаlаndusа", V), "кириллические а в латинском слове")
-  t.ok(seal.matches("Шaлaндушa", V), "латинские a в кириллическом слове")
-end
-
-function T.test_match_typos()
-  t.ok(seal.matches("Salandsa", V))
-  t.ok(seal.matches("Salendusa", V))
-  t.ok(seal.matches("Шаландушша", V))
-  t.ok(not seal.matches("Шасточка", V), "Шасточка")
-  t.ok(not seal.matches("Salender ois", V), "Salender ois")
-end
-
-function T.test_match_short_variant_strict()
-  -- «шаланда» (7 символов): допуск ≤1; длинные варианты (8+) — ≤2
-  t.ok(not seal.matches("Шеландолский", V), "длинное слово с «шаланд» внутри")
-  t.ok(seal.matches("шаландa", V), "лат. a в «шаланда»")
-  t.ok(seal.matches("шалнда", V), "одна пропущенная буква в «шаланда»")
-  t.ok(seal.matches("Salendusa", V))
-  t.ok(seal.matches("Salandsa", V))
-  t.ok(seal.matches("Шаландушша", V))
-  t.ok(seal.matches("Salanddsa", V), "одна замена в длинном варианте")
-  t.ok(seal.matches("Salndsa", V), "две правки в длинном варианте (допуск 2)")
-end
-
--- почерк: короткое слово читается с двумя правками — буква спутана, буква потеряна («шаланда» → «шабана»),
--- расстояние 2. Слово целиком длиной 6–8 букв («шаланда» ±1) принимается с допуском 2;
--- подстрока внутри длинного слова — по-прежнему только с допуском 1.
-function T.test_match_short_variant_whole_word_two_edits()
-  for _, w in ipairs({ "шабана", "Шабана", "шабонда", "шобанда", "шаланаа", "шалонда" }) do
-    t.ok(seal.matches(w, V), w)
-  end
-  t.ok(seal.matches("Моё слово шабана!", V), "в фразе")
-  -- те же две правки у обычных слов, структурно от «шабана» не отличить: принято, печать откроется
-  t.ok(seal.matches("Шалина", V), "Шалина: ш-а-л-и-н-а ↔ ш-а-л-а-н-д-а, 2 правки")
-  t.ok(seal.matches("Лашанда", V), "Лашанда: перестановка л/ш, 2 правки")
-end
-
-function T.test_match_short_variant_two_edits_not_for_substrings_or_short_words()
-  for _, w in ipairs({ "Шеландолский", "Ланда", "ашша ланда", "Шалка", "Шалаш", "Ралнина", "Шандыв",
-    "Я пришла", "Привет, дневник", "Сшала дане" }) do
-    t.ok(not seal.matches(w, V), w)
+function T.test_unconfigured_is_open()
+  for _, rules in ipairs({ false, {}, { remember = false }, { key = true, off = true } }) do
+    local s = new_seal(rules or nil)
+    t.eq(s.configured, false)
+    t.eq(s.open, true, "печати нет — открыта")
+    t.eq(s:lock("sleep"), false, "закрывать нечего")
+    t.eq(s.open, true, "lock не закрывает печать, которой нет")
+    t.eq(s:closes_on_sleep(), false)
   end
 end
 
-function T.test_match_in_phrase()
-  t.ok(seal.matches("Моё слово — Salandusa!", V))
-  t.ok(seal.matches("шаланда плывёт к берегу", V))
+function T.test_configured_starts_closed()
+  local s = new_seal({ key = true })
+  t.eq(s.configured, true)
+  t.eq(s.invalid, nil)
+  t.eq(s.open, false, "на старте печать закрыта")
+  t.eq(s.last_at, nil)
 end
 
-function T.test_normalize()
-  t.eq(seal.normalize("SALAN dusa!", true), "salandusa", "латиница: регистр, пробел, пунктуация")
-  t.eq(seal.normalize("Шалан\nдуша"), "шаландуша", "кириллица: перенос строки")
-  t.eq(seal.normalize("Ab"), seal.normalize("Аb"), "латинская a = кириллическая а (по умолчанию)")
-  t.eq(seal.normalize("Ab", true), seal.normalize("Аb", true), "то же при latin=true")
-  t.eq(seal.normalize("Шаландуша", true), "шaлahдyшa", "кириллические двойники → латиница")
-  t.eq(seal.normalize("Salandusa"), "sаlаndusа", "латинские двойники → кириллица")
-  t.eq(seal.normalize(" ? "), "", "пунктуация отброшена")
-end
-
-function T.test_unreadable()
-  local s = new_seal()
-  t.eq(s:feed("?").kind, "unreadable")
-  t.eq(s:feed("?").kind, "unreadable")
-  t.eq(s:feed("кто ты").kind, "refuse")
-  t.eq(s:feed("кто ты").kind, "refuse")
-  t.eq(s:feed("кто ты").kind, "hint", "счётчик не рос от нераспознанного")
-end
-
-function T.test_hint_every_third()
-  local s = new_seal()
-  local kinds = {}
-  for i = 1, 3 do kinds[i] = s:feed("кто ты") end
-  t.eq(kinds[1].kind, "refuse")
-  t.eq(kinds[2].kind, "refuse")
-  t.eq(kinds[3].kind, "hint")
-  t.eq(kinds[3].hint, HINTS[1], "3-я неудача — первая подсказка конфига")
-  for _ = 1, 2 do s:feed("кто ты") end
-  t.eq(s:feed("кто ты").hint, HINTS[2], "6-я неудача — вторая")
-  for _ = 1, 2 do s:feed("кто ты") end
-  t.eq(s:feed("кто ты").hint, HINTS[1], "9-я — снова первая, по кругу")
-end
-
--- в конфиге подсказок нет — каждая неудача просто отказ, подсказки не выдумываются
-function T.test_no_hints_in_config_means_refuse()
-  for _, hints in ipairs({ {}, false }) do
-    local s = seal.new(V, 3, hints or nil)
-    for i = 1, 6 do t.eq(s:feed("кто ты").kind, "refuse", "неудача " .. i) end
-  end
-end
-
-function T.test_unlock()
-  local s = new_seal()
-  t.ok(not s.open)
-  local r = s:feed("Salandusa")
-  t.eq(r.kind, "unlock")
-  t.eq(r.welcome, nil, "приветствие выбирает контроллер (набор персоны), не печать")
+function T.test_unlock_lock()
+  local s = new_seal({ key = true })
+  t.eq(s:unlock(500), true)
   t.eq(s.open, true)
-  t.eq(s:feed("Мне грустно"), nil, "при открытой печати feed — не дело печати")
-end
-
-function T.test_lock_resets()
-  local s = new_seal()
-  s:feed("кто ты")
-  s:feed("кто ты")
-  s:lock()
-  t.eq(s:feed("кто ты").kind, "refuse")
-  s:feed("кто ты")
-  t.eq(s:feed("кто ты").hint, HINTS[1], "номер подсказки тоже сброшен")
-end
-
-function T.test_lock_resets_hint_index()
-  local s = new_seal()
-  s:feed("кто ты")
-  s:feed("кто ты")
-  t.eq(s:feed("кто ты").hint, HINTS[1], "подсказка выдана до lock")
-  s:lock()
-  s:feed("кто ты")
-  s:feed("кто ты")
-  t.eq(s:feed("кто ты").hint, HINTS[1], "после lock подсказки снова с первой")
-end
-
-function T.test_match_phrases_no_false_positive()
-  -- короткий вариант («шаланда») ищется только внутри одного слова,
-  -- склейка слов через пробел/пунктуацию его не снимает
-  for _, phrase in ipairs({
-    "Сшала дане", "Сшала нам!", "Сшала. Да!", "Сшала, надоешо",
-    "Гшала на стоше", "Шала над лушканом", "ша-ша, ланна", "Ша Ландея",
-  }) do
-    t.ok(not seal.matches(phrase, V), phrase)
-  end
-end
-
-function T.test_match_short_variant_forms()
-  for _, w in ipairs({ "шалнда", "шаланду", "шаландa", "Шаланда плывёт к берегу" }) do
-    t.ok(seal.matches(w, V), w)
-  end
-end
-
-function T.test_match_across_words_only_whole_words()
-  -- окно через границу слов — склейка целых слов, а не кусок «хвост + голова»
-  for _, phrase in ipairs({ "гшала над гшалами", "ашша ланда", "Sala and sala" }) do
-    t.ok(not seal.matches(phrase, V), phrase)
-  end
-  for _, phrase in ipairs({ "шалан да", "Salan dusa", "Шалан\nдуша", "шалан-\nда", "Я вижу шаланду" }) do
-    t.ok(seal.matches(phrase, V), phrase)
-  end
-end
-
-function T.test_match_short_variant_across_words_exact_only()
-  -- короткий вариант («шаланда», ≤7): склейка ≥2 слов — только точное совпадение, без правок
-  for _, phrase in ipairs({ "Шала на скшоне", "Шала на", "шала да" }) do
-    t.ok(not seal.matches(phrase, V), phrase)
-  end
-  for _, phrase in ipairs({ "шалан да", "Ша-ланда", "Шалан-да" }) do
-    t.ok(seal.matches(phrase, V), phrase)
-  end
-end
-
-function T.test_match_long_variant_across_words()
-  -- вариант 8+ символов: склейка через пробел/перенос разрешена
-  t.ok(seal.matches("Salan dusa", V))
-  t.ok(seal.matches("Шалан\nдуша", V))
-  t.ok(seal.matches("Salan-dusa", V))
-end
-
-function T.test_lock_closes()
-  local s = new_seal()
-  s:feed("Salandusa")
-  s:lock()
+  t.eq(s.last_at, 500, "открытие ключом — последняя запись")
+  t.eq(s:lock("key"), true)
   t.eq(s.open, false)
-  t.eq(s:feed("кто ты").kind, "refuse")
+  t.eq(s:unlock(700), true, "снова открывается")
+  t.eq(s.open, true)
+end
+
+function T.test_touch_marks_last_entry()
+  local s = new_seal({ key = true, minutes = 5 })
+  s:unlock(100)
+  s:touch(250)
+  t.eq(s.last_at, 250)
+  t.eq(s:due(10 ^ 9), false, "правило времени — задача 7")
+end
+
+function T.test_invalid_never_unlocks()
+  local s = new_seal({ minutes = 5 })
+  t.eq(s.configured, true)
+  t.ok(s.invalid, "правило без key — битый конфиг")
+  t.eq(s.open, false)
+  t.eq(s:unlock(500), false, "битую печать ключ не открывает")
+  t.eq(s.open, false)
+  t.eq(s.last_at, nil)
+end
+
+function T.test_closes_on_sleep()
+  t.eq(new_seal({ key = true, on_sleep = true }):closes_on_sleep(), true)
+  t.eq(new_seal({ key = true }):closes_on_sleep(), false, "без on_sleep сон не закрывает")
+  t.eq(new_seal({ key = true, on_sleep = false }):closes_on_sleep(), false)
+end
+
+-- слово и его нечёткий поиск удалены вместе с подсказками
+function T.test_word_api_gone()
+  for _, name in ipairs({ "matches", "normalize", "lower" }) do
+    t.eq(seal[name], nil, name .. " удалён (нижний регистр — str.lower)")
+  end
+  t.eq(new_seal({ key = true }).feed, nil)
 end
 
 function T.test_texts_verbatim()

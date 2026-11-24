@@ -4,6 +4,7 @@
 -- контроллер настоящий на поддельных deps.
 require("sqlite_shim") -- riddle.sync тянет хранилище
 local t = require("t")
+local stand = require("seal_stand")
 local controller = require("riddle.controller")
 local status = require("riddle.status")
 local sync = require("riddle.sync")
@@ -90,7 +91,7 @@ end
 
 local function ctl()
   return controller.new{
-    cfg = { password_variants = { "salandusa" } },
+    cfg = { seal = stand.key() },
     memory = nil,
     read_file = function() return "PNG" end,
     b64 = function(s) return "B64" .. s end,
@@ -386,8 +387,9 @@ function T.test_no_idle_or_followup_while_status_open()
     entries = function() return { { role = "owner", text = "запись" }, { role = "diary", text = "ответ" } } end,
     set_summary = nop,
   }
+  stand.next_page_is_key(d.controller)
   page_done(d)
-  d.runner:done(reply("Salandusa", ""))
+  d.runner:done(reply("?", ""))
   t.ok(d.followup_task, "хвост назначен до страницы")
   idles = 0
   d:openStatus("triangle")

@@ -94,9 +94,9 @@ end
 function T.test_suspend_logs_seal_locked_only_when_sealed()
   local body = MAIN:match("function RiddleDiary:onSuspend%(%)(.-)\nend")
   t.ok(body, "onSuspend найден")
-  local guard = body:find("ctl.sealed", 1, true)
+  local guard = body:find("ctl.seal:closes_on_sleep()", 1, true)
   local line = body:find("seal locked", 1, true)
-  t.ok(guard and line and guard < line, "«seal locked» только под ctl.sealed")
+  t.ok(guard and line and guard < line, "«seal locked» только под ctl.seal:closes_on_sleep()")
 end
 
 function T.test_nothing_outside_widget_touches_invitation()

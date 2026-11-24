@@ -1,6 +1,7 @@
 -- Связка на устройстве: controller + llm + http (фейковый post и часы).
 require("sqlite_shim")
 local t = require("t")
+local stand = require("seal_stand")
 local json = require("dkjson")
 local app = require("riddle.app")
 local texts = require("riddle.texts")
@@ -24,9 +25,11 @@ end
 -- env: posts — журнал вызовов post; script — очередь {cost | hang, status, body | err}
 local function make(cfg, devmode)
   local env = { clock = 0, posts = {}, script = {}, logs = {}, removed = {} }
+  cfg = cfg or { gemini_key = "km", seal = stand.key() }
+  -- config.load всегда отдаёт seal: стенд без него — как файл конфига без таблицы seal (печати нет)
+  if cfg.seal == nil then cfg.seal = stand.none() end
   env.deps = {
-    cfg = cfg or { gemini_key = "km",
-                   password_variants = { "salandusa" } },
+    cfg = cfg,
     memory = nil,
     http = {
       post = function(url, headers, body, timeout_s)
@@ -88,7 +91,7 @@ function T.test_gemini_429_gives_limit_not_cloudflare()
 end
 
 function T.test_extra_keys_only_fail_without_network()
-  local env = make({ stale_key = "kc", password_variants = { "salandusa" } })
+  local env = make({ stale_key = "kc", seal = stand.key() })
   t.ok(texts.fail_other[1] == env.ctrl:on_page(PNG))
   t.eq(#env.posts, 0, "с одними лишними ключами сеть не трогаем")
 end
@@ -148,24 +151,24 @@ end
 
 function T.test_locked_seal_log_names_answering_provider()
   local env = make(nil, true)
-  env.script[1] = { body = resp({ read = "Salandusa", reply = "Нет." }) }
+  env.script[1] = { body = resp({ read = "кто ты", reply = "Нет." }) }
   env.ctrl:on_page(PNG)
-  t.ok(logged(env, 'riddle: seal read "Salandusa" -> unlock via gemini'), table.concat(env.logs, "\n"))
+  t.ok(logged(env, 'riddle: locked read "кто ты" via gemini'), table.concat(env.logs, "\n"))
 end
 
 -- devmode доходит до контроллера через app.new_controller: без него текст read в лог не идёт
 function T.test_seal_log_without_devmode_hides_read_text()
   local env = make()
-  env.script[1] = { body = resp({ read = "Salandusa", reply = "Нет." }) }
+  env.script[1] = { body = resp({ read = "кто ты", reply = "Нет." }) }
   env.ctrl:on_page(PNG)
-  t.ok(logged(env, "riddle: seal read 9 chars -> unlock via gemini"), table.concat(env.logs, "\n"))
+  t.ok(logged(env, "riddle: locked read 6 chars via gemini"), table.concat(env.logs, "\n"))
   for _, l in ipairs(env.logs) do
-    t.ok(not l:find("Salandusa", 1, true), "текст read не в логе: " .. l)
+    t.ok(not l:find("кто ты", 1, true), "текст read не в логе: " .. l)
   end
 end
 
 function T.test_no_keys_fail_without_network()
-  local env = make({ password_variants = {} })
+  local env = make({ seal = stand.none() })
   t.ok(texts.fail_other[1] == env.ctrl:on_page(PNG))
   t.eq(#env.posts, 0)
 end
@@ -212,7 +215,7 @@ end
 -- свой провайдер: ключ уходит в заголовок, в лог — только хост и статус
 function T.test_custom_provider_key_never_reaches_log()
   local env = make({ providers = { { name = "lite", url = "https://lite.test/v1/chat/completions",
-    model = "gpt-x", key = "SECRET-CUSTOM-KEY" } }, password_variants = { "salandusa" } })
+    model = "gpt-x", key = "SECRET-CUSTOM-KEY" } }, seal = stand.key() })
   env.script[1] = { body = resp({ read = "кто ты", reply = "Я — страницы." }) }
   t.eq(env.ctrl:on_page(PNG), "Я — страницы.")
   t.eq(#env.posts, 1)
@@ -226,7 +229,7 @@ end
 -- свой провайдер с неверным ключом (401) не опрашивается на каждой странице: мёртв до перезапуска
 function T.test_custom_provider_with_401_is_dead_for_following_calls()
   local env = make({ providers = { { name = "lite", url = "https://lite.test/v1/chat/completions",
-    model = "gpt-x", key = "CUSTOM-KEY-1" } }, gemini_key = "km", password_variants = { "salandusa" } })
+    model = "gpt-x", key = "CUSTOM-KEY-1" } }, gemini_key = "km", seal = stand.key() })
   env.script[1] = { status = 401, body = '{"error":"invalid token"}' }
   env.script[2] = { body = resp({ read = "кто ты", reply = "Я — страницы." }) }
   t.eq(env.ctrl:on_page(PNG), "Я — страницы.")
@@ -241,7 +244,7 @@ end
 -- 401 с пустым телом (прокси, обрыв) своего провайдера не хоронит
 function T.test_custom_provider_not_dead_on_empty_401()
   local env = make({ providers = { { name = "lite", url = "https://lite.test/v1/chat/completions",
-    model = "gpt-x", key = "CUSTOM-KEY-1" } }, gemini_key = "km", password_variants = { "salandusa" } })
+    model = "gpt-x", key = "CUSTOM-KEY-1" } }, gemini_key = "km", seal = stand.key() })
   env.script[1] = { status = 401, body = "" }
   env.script[2] = { status = 429, body = "{}" }
   env.ctrl:on_page(PNG)
@@ -257,7 +260,7 @@ function T.test_custom_providers_on_same_url_die_separately()
   local url = "https://lite.test/v1/chat/completions"
   local env = make({ providers = { { name = "a", url = url, model = "m", key = "KEY-AAAAAA" },
                                    { name = "b", url = url, model = "m", key = "KEY-BBBBBB" } },
-                     gemini_key = "km", password_variants = { "salandusa" } })
+                     gemini_key = "km", seal = stand.key() })
   env.script[1] = { status = 401, body = '{"error":"invalid token"}' }
   env.script[2] = { body = resp({ read = "кто ты", reply = "Я — страницы." }) }
   t.eq(env.ctrl:on_page(PNG), "Я — страницы.")
@@ -272,7 +275,7 @@ end
 -- 401 от прокси/портала (HTML) и прочие статусы свой провайдер не хоронят
 function T.test_custom_provider_not_dead_on_portal_html_or_429()
   local env = make({ providers = { { name = "lite", url = "https://lite.test/v1/chat/completions",
-    model = "gpt-x", key = "CUSTOM-KEY-1" } }, gemini_key = "km", password_variants = { "salandusa" } })
+    model = "gpt-x", key = "CUSTOM-KEY-1" } }, gemini_key = "km", seal = stand.key() })
   env.script[1] = { status = 401, body = "<html>Please log in</html>" }
   env.script[2] = { status = 429, body = "{}" }
   env.ctrl:on_page(PNG)
@@ -284,7 +287,7 @@ function T.test_custom_provider_not_dead_on_portal_html_or_429()
 end
 
 function T.test_gemini_429_falls_to_beatapi_through_app()
-  local env = make({ gemini_key = "km", providers = { BEAT }, password_variants = { "salandusa" } })
+  local env = make({ gemini_key = "km", providers = { BEAT }, seal = stand.key() })
   env.script[1] = { status = 429, body = '{"error":"rate"}' }
   env.script[2] = { body = resp({ read = "кто ты", reply = "Я — страницы." }) }
   t.eq(env.ctrl:on_page(PNG), "Я — страницы.")
@@ -433,7 +436,7 @@ end
 
 -- Gemini съел свои 4 с — BeatAPI получает весь остаток бюджета (≥ 3.5 с)
 function T.test_gemini_timeout_leaves_beatapi_real_timeout()
-  local env = make({ gemini_key = "km", providers = { BEAT }, password_variants = { "salandusa" } })
+  local env = make({ gemini_key = "km", providers = { BEAT }, seal = stand.key() })
   env.script[1] = { cost = 4, err = "timeout" }
   env.script[2] = { body = resp({ read = "кто ты", reply = "Я — страницы." }) }
   t.eq(env.ctrl:on_page(PNG), "Я — страницы.")
@@ -445,7 +448,7 @@ end
 local function auth_of(env, i) return env.posts[i].headers["Authorization"] end
 
 function T.test_key_with_401_is_dead_for_following_calls()
-  local env = make({ gemini_keys = { "kA", "kB" }, password_variants = { "salandusa" } })
+  local env = make({ gemini_keys = { "kA", "kB" }, seal = stand.key() })
   env.script[1] = { status = 401, body = '{"error":{"message":"API key not valid."}}' }
   env.script[2] = { body = resp({ read = "кто ты", reply = "Я — страницы." }) }
   t.eq(env.ctrl:on_page(PNG), "Я — страницы.")
@@ -462,7 +465,7 @@ function T.test_key_with_401_is_dead_for_following_calls()
 end
 
 function T.test_403_also_marks_key_dead()
-  local env = make({ gemini_keys = { "kA", "kB" }, password_variants = { "salandusa" } })
+  local env = make({ gemini_keys = { "kA", "kB" }, seal = stand.key() })
   env.script[1] = { status = 403, body = '{"error":{"message":"API key not valid."}}' }
   env.script[2] = { body = resp({ read = "кто ты", reply = "Я — страницы." }) }
   env.ctrl:on_page(PNG)
@@ -473,7 +476,7 @@ function T.test_403_also_marks_key_dead()
 end
 
 function T.test_429_does_not_mark_key_dead()
-  local env = make({ gemini_keys = { "kA", "kB" }, password_variants = { "salandusa" } })
+  local env = make({ gemini_keys = { "kA", "kB" }, seal = stand.key() })
   env.script[1] = { status = 429, body = '{}' }
   env.script[2] = { status = 429, body = '{}' }
   env.ctrl:on_page(PNG)
@@ -486,7 +489,7 @@ end
 
 -- 403 captive-портала или прокси (без «API key» в теле) ключ не хоронит
 function T.test_403_from_portal_body_keeps_key_alive()
-  local env = make({ gemini_keys = { "kA", "kB" }, password_variants = { "salandusa" } })
+  local env = make({ gemini_keys = { "kA", "kB" }, seal = stand.key() })
   env.script[1] = { status = 403, body = "<html>Please log in to the Wi-Fi</html>" }
   env.script[2] = { body = resp({ read = "кто ты", reply = "Я — страницы." }) }
   t.eq(env.ctrl:on_page(PNG), "Я — страницы.")
@@ -501,7 +504,7 @@ function T.test_403_from_portal_body_keeps_key_alive()
 end
 
 function T.test_401_without_api_key_in_body_keeps_key_alive()
-  local env = make({ gemini_key = "kA", password_variants = { "salandusa" } })
+  local env = make({ gemini_key = "kA", seal = stand.key() })
   env.script[1] = { status = 401, body = "proxy auth required" }
   env.ctrl:on_page(PNG)
   env.script[1] = { status = 429, body = '{}' }
@@ -511,7 +514,7 @@ function T.test_401_without_api_key_in_body_keeps_key_alive()
 end
 
 function T.test_403_from_beatapi_marks_nothing()
-  local env = make({ gemini_key = "kA", providers = { BEAT }, password_variants = { "salandusa" } })
+  local env = make({ gemini_key = "kA", providers = { BEAT }, seal = stand.key() })
   env.script[1] = { status = 429, body = '{}' }
   env.script[2] = { status = 403, body = '{"error":"API key not valid"}' }
   env.ctrl:on_page(PNG)
@@ -533,7 +536,7 @@ function T.test_llm_done_line_masks_secrets()
 end
 
 function T.test_all_keys_dead_behaves_like_no_keys()
-  local env = make({ gemini_key = "kA", password_variants = { "salandusa" } })
+  local env = make({ gemini_key = "kA", seal = stand.key() })
   env.script[1] = { status = 401, body = '{"error":{"status":"API_KEY_INVALID"}}' }
   t.ok(texts.fail_other[1] == env.ctrl:on_page(PNG))
   t.eq(#env.posts, 1)
@@ -544,7 +547,7 @@ function T.test_all_keys_dead_behaves_like_no_keys()
 end
 
 function T.test_dead_gemini_keys_leave_beatapi()
-  local env = make({ gemini_key = "kA", providers = { BEAT }, password_variants = { "salandusa" } })
+  local env = make({ gemini_key = "kA", providers = { BEAT }, seal = stand.key() })
   env.script[1] = { status = 401, body = '{"error":{"status":"API_KEY_INVALID"}}' }
   env.script[2] = { body = resp({ read = "кто ты", reply = "Я — страницы." }) }
   env.ctrl:on_page(PNG)
@@ -579,7 +582,7 @@ end
 -- ключ из конфига, разрезанный границей 160: шаблоны (AIza…, sk-…) обрезанный кусок поймали бы и сами,
 -- а дословная маскировка — нет; маскировать надо до обрезки
 function T.test_config_key_cut_by_160_limit_is_masked_before_truncation()
-  local env = make({ gemini_key = "km", password_variants = { "salandusa" },
+  local env = make({ gemini_key = "km", seal = stand.key(),
                      providers = { { name = "mine", url = "https://llm.example.org/v1/chat/completions",
                                      model = "m", key = "mistral_ZZZZ9999_LONGKEY" } } })
   env.script[1] = { status = 400, body = string.rep("x", 150) .. " mistral_ZZZZ9999_LONGKEY" }
@@ -623,7 +626,7 @@ function T.test_429_minute_quota_gets_label_in_log()
 end
 
 function T.test_429_with_both_quotas_is_day_and_other_statuses_have_no_label()
-  local env = make({ gemini_key = "km", gemini_keys = { "kn" }, password_variants = { "salandusa" }, providers = { BEAT } })
+  local env = make({ gemini_key = "km", gemini_keys = { "kn" }, seal = stand.key(), providers = { BEAT } })
   env.script[1] = { status = 429, body = quota_body("GenerateRequestsPerMinutePerProjectPerModel-FreeTier PerDay") }
   env.script[2] = { status = 429, body = '{"error":"rate"}' }
   env.script[3] = { status = 503, body = quota_body("GenerateRequestsPerDayPerProjectPerModel-FreeTier") }
@@ -652,7 +655,7 @@ function T.test_config_key_values_are_masked_verbatim_in_log()
   local env = make({ gemini_key = "gk-secret-AAAA1111", gemini_keys = { "gk-secret-BBBB2222" },
                      providers = { { name = "mine", url = "https://llm.example.org/v1/chat/completions",
                                      model = "m", key = "mistral_ZZZZ9999" }, BEAT },
-                     password_variants = { "salandusa" } })
+                     seal = stand.key() })
   env.script[1] = { status = 400, body = '{"error":"bad token mistral_ZZZZ9999 gk-secret-AAAA1111"}' }
   env.script[2] = { err = "connect failed https://x/?t=gk-secret-BBBB2222" }
   env.script[3] = { err = "bt-secret-CCCC3333 refused" }
@@ -670,7 +673,7 @@ end
 -- маскируется обрезанное значение, иначе секрет в логе открытым текстом
 function T.test_padded_config_key_is_masked_trimmed_in_log()
   local env = make({ gemini_key = "  gk-secret-AAAA1111\n", notion_token = "\tntn_NOTION4242secret ",
-                     password_variants = { "salandusa" } })
+                     seal = stand.key() })
   env.script[1] = { status = 400, body = '{"error":"echo gk-secret-AAAA1111 ntn_NOTION4242secret"}' }
   env.ctrl:on_page(PNG)
   t.ok(#env.logs > 0, "лог не пуст")
@@ -683,7 +686,7 @@ end
 
 -- токен Notion (формат ntn_…, шаблонам mask не известен) тоже секрет конфига
 function T.test_notion_token_masked_in_logs()
-  local env = make({ gemini_key = "km", notion_token = "ntn_NOTION4242secret", password_variants = { "salandusa" } })
+  local env = make({ gemini_key = "km", notion_token = "ntn_NOTION4242secret", seal = stand.key() })
   env.script[1] = { status = 400, body = '{"error":"echo ntn_NOTION4242secret"}' }
   env.ctrl:on_page(PNG)
   t.ok(#env.logs > 0, "лог не пуст")
@@ -703,7 +706,7 @@ end
 
 -- ключ BeatAPI (формат шаблонам mask не известен) не доходит до лога ни в теле ответа, ни в тексте ошибки
 function T.test_beatapi_key_masked_in_logs()
-  local env = make({ gemini_key = "km", providers = { BEAT }, password_variants = { "salandusa" } })
+  local env = make({ gemini_key = "km", providers = { BEAT }, seal = stand.key() })
   env.script[1] = { status = 429, body = '{}' }
   env.script[2] = { status = 400, body = '{"error":"bad key bt-secret-CCCC3333"}' }
   env.ctrl:on_page(PNG)
@@ -717,7 +720,7 @@ end
 
 -- старый конфиг с openrouter_key (прямо в cfg): ключ игнорируется — ни запроса к OpenRouter, ни в хостах
 function T.test_stale_openrouter_key_is_ignored()
-  local env = make({ gemini_key = "km", openrouter_key = "or-stale-KEY9999", password_variants = { "salandusa" } })
+  local env = make({ gemini_key = "km", openrouter_key = "or-stale-KEY9999", seal = stand.key() })
   env.script[1] = { status = 429, body = '{}' }
   env.ctrl:on_page(PNG)
   t.eq(#env.posts, 1, "после Gemini запасного нет")
@@ -768,7 +771,7 @@ function T.test_when_idle_waits_for_pen_up()
 end
 
 -- несколько ключей Gemini: стартовый ключ сдвигается от вызова к вызову, 429 -> следующий ключ
-local MULTI = { gemini_key = "kA", gemini_keys = { "kB", "kC" }, password_variants = { "salandusa" } }
+local MULTI = { gemini_key = "kA", gemini_keys = { "kB", "kC" }, seal = stand.key() }
 
 function T.test_start_key_rotates_between_calls()
   local env = make(MULTI)
@@ -796,7 +799,7 @@ end
 -- absorb в родителе ------------------------------------------------------------------------------
 local prompt = require("riddle.prompt")
 local function via_pipe(payload) return json.decode(json.encode(payload)) end
-local KEYS2 = { gemini_keys = { "kA", "kB" }, password_variants = { "salandusa" } }
+local KEYS2 = { gemini_keys = { "kA", "kB" }, seal = stand.key() }
 
 function T.test_remote_payload_carries_logs_and_dead_keys()
   local env = make(KEYS2)
@@ -839,7 +842,7 @@ end
 -- gemini-proxy ответил перегрузкой модели (503 Google) — прямой Gemini той же модели не вызывается, в логе ответа —
 -- строка о пропуске; запрос сразу у следующего провайдера
 function T.test_remote_fn_proxy_overload_skips_direct_gemini_and_logs()
-  local env = make({ gemini_keys = { "kA" }, password_variants = { "salandusa" }, providers = {
+  local env = make({ gemini_keys = { "kA" }, seal = stand.key(), providers = {
     { name = "gemini-proxy", format = "gemini", url = "https://proxy.test", model = "gemini-3.5-flash-lite",
       proxy_auth = "tok" },
     { name = "groq", url = "https://api.groq.test/v1/chat/completions", model = "m", key = "kg", after_legacy = true },
@@ -918,7 +921,7 @@ function T.test_remote_fn_rotates_start_key_across_real_fork()
 end
 
 function T.test_remote_err_is_masked()
-  local env = make({ gemini_key = "SECRETKEY123", password_variants = { "salandusa" } })
+  local env = make({ gemini_key = "SECRETKEY123", seal = stand.key() })
   local chain = app.chain(env.deps)
   env.script[1] = { err = "connect failed SECRETKEY123" }
   local payload = via_pipe(chain:remote_fn(prompt.locked("B64"), true)())
@@ -955,7 +958,7 @@ end
 -- потолок попытки на пути ответа — по длине ответа: ANSWER_ATTEMPT_BASE_S + потолок токенов × ANSWER_ATTEMPT_PER_TOKEN_S,
 -- не больше ANSWER_ATTEMPT_S. Ответ дневника (200 токенов) — 10,5 с; пересказ (1500) — прежние 12 с
 function T.test_remote_answer_attempt_ceiling_by_answer_size()
-  local env = make({ gemini_key = "km", providers = { BEAT }, password_variants = { "salandusa" } })
+  local env = make({ gemini_key = "km", providers = { BEAT }, seal = stand.key() })
   t.eq(app.ANSWER_ATTEMPT_S, 12)
   local chain = app.chain(env.deps)
   env.script[1] = { hang = true, err = "wantread", phase = "wait" }
@@ -980,7 +983,7 @@ end
 function T.test_remote_answer_reserve_for_last_provider()
   local GROQ = { name = "groq", url = "https://api.groq.com/openai/v1/chat/completions", model = "m",
     key = "gq-secret", after_legacy = true }
-  local env = make({ gemini_key = "km", providers = { GROQ, BEAT }, password_variants = { "salandusa" } })
+  local env = make({ gemini_key = "km", providers = { GROQ, BEAT }, seal = stand.key() })
   t.ok(app.ANSWER_RESERVE_S >= 6 and app.ANSWER_RESERVE_S <= 8, "резерв 6–8 с: " .. tostring(app.ANSWER_RESERVE_S))
   local chain = app.chain(env.deps)
   env.script[1] = { hang = true, err = "timeout" }
@@ -1398,7 +1401,7 @@ local WATCHED_KNOW = { { title = "Фильмы и сериалы", total = 2, do
 -- false — ключа в конфиге нет
 local function picks_env(watched_values, keys)
   if watched_values == nil then watched_values = { "Просмотрено", "Прочитано" } end
-  local env = make({ gemini_key = not keys and "km" or nil, gemini_keys = keys, password_variants = { "salandusa" },
+  local env = make({ gemini_key = not keys and "km" or nil, gemini_keys = keys, seal = stand.key(),
     watched_values = watched_values or nil })
   env.deps.memory = {
     use_persona = function() return true end, session = function() return 1 end, summaries = function() return {} end,
@@ -1615,7 +1618,7 @@ function T.test_groq_retry_with_long_history_stays_in_limit()
   local prompt = require("riddle.prompt")
   local GROQ = { name = "groq", url = "https://api.groq.com/openai/v1/chat/completions", model = "qwen/qwen3.8-27b",
     key = "gq-secret-DDDD4444", after_legacy = true, max_input_chars = 10000 }
-  local env = make({ gemini_key = "km", password_variants = { "salandusa" }, watched_values = { "Просмотрено" },
+  local env = make({ gemini_key = "km", seal = stand.key(), watched_values = { "Просмотрено" },
     providers = { GROQ } })
   local recent = {}
   for i = 1, 40 do
@@ -1709,7 +1712,7 @@ end
 -- генерация персоны (opts.limits = "gen", потолок дочернего CFG.gen_ceil_s = 60 с): ответ на тысячи токенов —
 -- свой бюджет 50 с и попытка до 20 с (по длине ответа не урезается); путь ответа — 25 и 10,5 (короткий ответ)
 function T.test_remote_gen_budget_and_attempt()
-  local env = make({ gemini_key = "km", providers = { BEAT }, password_variants = { "salandusa" } })
+  local env = make({ gemini_key = "km", providers = { BEAT }, seal = stand.key() })
   t.eq(app.GEN_BUDGET_S, 50)
   t.eq(app.GEN_ATTEMPT_S, 20)
   local chain = app.chain(env.deps)
@@ -1756,7 +1759,7 @@ end
 
 -- gemini-proxy (format = "gemini", Cloudflare Worker rss_bot): токен прокси — заголовком X-Proxy-Auth --------
 local function proxy_cfg(tok, extra)
-  local cfg = { gemini_key = "km", password_variants = { "salandusa" }, providers = {
+  local cfg = { gemini_key = "km", seal = stand.key(), providers = {
     { name = "gemini-proxy", format = "gemini", url = "https://proxy.test", model = "gemini-3.5-flash-lite",
       proxy_auth = tok or "proxy_tok_SECRET_9f8e7d" } } }
   for _, e in ipairs(extra or {}) do cfg.providers[#cfg.providers + 1] = e end

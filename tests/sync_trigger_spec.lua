@@ -88,7 +88,9 @@ local function load_plugin(env)
     ["logger"] = { info = log, warn = log, err = log },
     ["ui/time"] = { monotonic = function() return env.now or 0 end, to_s = function(x) return x end,
                     to_ms = function(x) return x * 1000 end },
-    ["riddle.app"] = { new_controller = function() return { on_sleep = function() end } end,
+    ["riddle.app"] = { new_controller = function()
+      return { on_sleep = function() end, seal = { closes_on_sleep = function() return false end } }
+    end,
                        hosts = function() return {} end },
     ["riddle.config"] = { load = function()
       return { seal = { on = false }, notion_token = env.token, tasks_source = env.tasks_source }

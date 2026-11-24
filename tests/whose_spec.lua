@@ -3,6 +3,7 @@
 -- дочерний процесс — поддельный: remote_fn запоминает запрос, ответ подаётся в finish_followup / finish вручную.
 require("sqlite_shim")
 local t = require("t")
+local stand = require("seal_stand")
 local json = require("dkjson")
 local memory = require("riddle.memory")
 local controller = require("riddle.controller")
@@ -33,15 +34,15 @@ local WORLD_TEXT = "Хогвартс, замок в Шотландии. МИР-�
 
 local paths = {}
 
--- контроллер без печати на новой базе; whose — строка конфига (nil — нет строки); variants — слова печати.
+-- контроллер на новой базе; whose — строка конфига (nil — нет строки); sealed — печать по ключу (иначе её нет).
 -- Строка в базе не заведена: контроллер заведёт её сам (state = "new", задача 7)
-local function bare(whose, path, variants)
+local function bare(whose, path, sealed)
   path = path or os.tmpname()
   paths[#paths + 1] = path
   local env = { path = path, calls = {}, logs = {}, now = 1000 }
   env.mem = memory.open(path, function(msg) env.logs[#env.logs + 1] = msg end)
   env.ctrl = controller.new{
-    cfg = { whose = whose, password_variants = variants or {} },
+    cfg = { whose = whose, seal = sealed and stand.key() or stand.none() },
     memory = env.mem,
     read_file = function() return "PNGBYTES" end,
     b64 = function() return "B64" end,
@@ -63,8 +64,8 @@ end
 
 -- то же, но строка уже разобрана (state = "ready", как у устройства после переспроса): тесты генерации персоны и
 -- голоса начинаются с раздела persona. «Методов» и пустая строка базы не касаются
-local function make(whose, path, variants)
-  local env = bare(whose, path, variants)
+local function make(whose, path, sealed)
+  local env = bare(whose, path, sealed)
   if whose and not persona.is_methods(whose) then
     env.mem:add_persona{ key = persona.key(whose), line = whose, source = "config", state = "ready", ts = env.now }
   end
@@ -592,7 +593,7 @@ end
 
 -- первая строка на чистой странице: с печатью — приглашение персонажа, без печати — его приветствие
 function T.test_invitation_from_persona_when_sealed()
-  local env = make("Гермиона Грейнджер", nil, { "salandusa" })
+  local env = make("Гермиона Грейнджер", nil, true)
   env.mem:add_persona{ key = persona.key("Гермиона Грейнджер"), line = "Гермиона Грейнджер", source = "config",
     state = "ready" }
   local row = env.mem:persona_by_key(persona.key("Гермиона Грейнджер"))
@@ -601,8 +602,8 @@ function T.test_invitation_from_persona_when_sealed()
   t.ok(in_list(texts.neutral.ru.invitation, env.ctrl:opening_text()), "без мира — нейтральное приглашение")
   env.mem:set_part(row.id, "world", WORLD_TEXT, 1)
   t.eq(env.ctrl:opening_text(), PERSONA_OBJ.invitation)
-  t.eq(make(METHODS_LINE, nil, { "salandusa" }).ctrl:opening_text(), texts.invitation, "«Методов» — прежнее")
-  t.ok(in_list(texts.neutral.ru.invitation, make("Гермиона Грейнджер", nil, { "salandusa" }).ctrl:opening_text()),
+  t.eq(make(METHODS_LINE, nil, true).ctrl:opening_text(), texts.invitation, "«Методов» — прежнее")
+  t.ok(in_list(texts.neutral.ru.invitation, make("Гермиона Грейнджер", nil, true).ctrl:opening_text()),
     "персоны ещё нет — нейтральное приглашение")
   local open = make("Гермиона Грейнджер")
   generate(open, 3) -- greetings третьим
@@ -1163,19 +1164,16 @@ function T.test_unseen_question_is_shown_before_it_is_answered()
   t.eq(ajob.stage, "confirm", "вопрос показан — запись читается как ответ")
 end
 
--- с печатью: закрытая страница — приглашение, вопрос идёт после слова, вместе с приветствием
+-- с печатью: закрытая страница — приглашение, вопрос идёт после ключа, вместе с приветствием
 function T.test_sealed_question_comes_with_welcome()
-  local env = bare(R2_LINE, nil, { "salandusa" })
-  local lock = env.ctrl:begin(PNG)
-  t.eq(lock.mode, "locked")
-  local first = env.ctrl:finish(lock, { result = { read = "salandusa" } })
+  local env = bare(R2_LINE, nil, true)
+  local first = env.ctrl:seal_toggle()
   t.ok(in_list(texts.neutral.en.welcome, first), "строка ещё не разобрана — только приветствие: " .. tostring(first))
   resolve(env, R2_OBJ)
-  env.ctrl:on_sleep() -- печать снова закрыта
+  env.ctrl:seal_toggle() -- ключ снова закрыл печать
   t.ok(in_list(texts.neutral.en.invitation, env.ctrl:opening_text()), "закрытая страница — приглашение, не вопрос")
-  lock = env.ctrl:begin(PNG)
-  t.eq(lock.mode, "locked")
-  local text = env.ctrl:finish(lock, { result = { read = "salandusa" } })
+  t.eq(env.ctrl:begin(PNG).mode, "locked")
+  local text = env.ctrl:seal_toggle()
   t.ok(has(text, R2_ASK), "приветствие и вопрос одной репликой: " .. tostring(text))
   local welcome = text:sub(1, #text - #R2_ASK - 1)
   t.ok(in_list(texts.neutral.en.welcome, welcome), "приветствие нейтральное: " .. welcome)
@@ -1535,13 +1533,12 @@ function T.test_ask_repeats_after_offline()
   t.ok(in_list(texts.neutral.ru.later, env.ctrl:finish(third, nil, "gemini: timeout")), "язык вопроса — русский")
 end
 
--- с печатью: закрытая страница — нейтральное приглашение; слово снимает печать, вопрос идёт вместе с приветствием
+-- с печатью: закрытая страница — нейтральное приглашение; ключ снимает печать, вопрос идёт вместе с приветствием
 function T.test_sealed_then_question()
-  local env = bare(nil, nil, { "salandusa" })
+  local env = bare(nil, nil, true)
   t.ok(in_list(texts.neutral.en.invitation, env.ctrl:opening_text()), "приглашение нейтральное")
-  local lock = env.ctrl:begin(PNG)
-  t.eq(lock.mode, "locked", "сначала печать, потом вопрос")
-  local first = env.ctrl:finish(lock, { result = { read = "salandusa" } })
+  t.eq(env.ctrl:begin(PNG).mode, "locked", "сначала печать, потом вопрос")
+  local first = env.ctrl:seal_toggle()
   local joined
   for _, w in ipairs(texts.neutral.en.welcome) do
     for _, a in ipairs(texts.neutral.en.ask) do
@@ -1756,7 +1753,7 @@ function T.test_title_creates_nothing()
 end
 
 function T.test_sealed_page_uses_persona_language_gender_and_kind()
-  local env = make("Hermione Granger", nil, { "salandusa" })
+  local env = make("Hermione Granger", nil, true)
   ready_full(env, "Hermione Granger", EN_OBJ)
   local job = env.ctrl:begin(PNG)
   t.eq(job.mode, "locked")
@@ -1767,8 +1764,8 @@ end
 
 -- персонажа ещё нет (раздела persona нет; вопрос без ответа): язык записи, без рода — не «по-русски» и не «мужском»
 function T.test_sealed_page_without_persona_uses_record_language()
-  for name, env in pairs({ pending = make("Hermione Granger", nil, { "salandusa" }),
-      asking = bare(nil, nil, { "salandusa" }) }) do
+  for name, env in pairs({ pending = make("Hermione Granger", nil, true),
+      asking = bare(nil, nil, true) }) do
     local s = env.ctrl:begin(PNG).messages[1].content
     t.ok(has(s, "на языке записи") and has(s, "о себе без рода"), name .. ": " .. s)
     t.ok(not has(s, "по-русски") and not has(s, "мужском"), name .. ": нет русского и мужского")
@@ -1777,7 +1774,7 @@ end
 
 -- «Методов» — снимок: закрытая печать через контроллер та же, что без персон
 function T.test_methods_locked_through_controller_unchanged()
-  local env = make(METHODS_LINE, nil, { "salandusa" })
+  local env = make(METHODS_LINE, nil, true)
   t.eq(env.ctrl:begin(PNG).messages[1].content, prompt.locked("B64")[1].content, "закрытая печать")
 end
 

@@ -2,6 +2,7 @@
 -- не ждёт; ответ приходит через on_done. Заглушки KOReader и часы — как в answer_cycle_spec.lua;
 -- runner поддельный (ручной on_done), контроллер настоящий на поддельных deps.
 local t = require("t")
+local stand = require("seal_stand")
 local texts = require("riddle.texts")
 local controller = require("riddle.controller")
 local llm = require("riddle.llm")
@@ -90,9 +91,10 @@ local function fake_runner()
   return r
 end
 
-local function ctl()
+-- rules — правила печати (по умолчанию — по ключу)
+local function ctl(rules)
   return controller.new{
-    cfg = { password_variants = { "salandusa" } },
+    cfg = { seal = rules or stand.key() },
     memory = nil,
     read_file = function() return "PNG" end,
     b64 = function(s) return "B64" .. s end,
@@ -320,8 +322,9 @@ end
 
 function T.test_async_unlock_schedules_followup()
   local d = diary()
+  stand.next_page_is_key(d.controller)
   page_done(d)
-  d.runner:done(reply("Salandusa", ""))
+  d.runner:done(reply("?", ""))
   t.ok(d.controller.seal_open)
   t.ok(in_list(texts.welcomes, d.revealed[1]), tostring(d.revealed[1]))
   t.ok(d.followup_task, "после приветствия запланирован пересказ")
@@ -341,8 +344,9 @@ function T.test_async_followup_summary_goes_to_runner()
   local d = diary()
   local saved = {}
   d.controller.deps.memory = summary_memory(saved)
+  stand.next_page_is_key(d.controller)
   page_done(d)
-  d.runner:done(reply("Salandusa", ""))
+  d.runner:done(reply("?", ""))
   run(120)
   local job = d.runner.jobs[#d.runner.jobs]
   t.eq(#d.runner.jobs, 2, "ответ и пересказ")
@@ -381,8 +385,9 @@ function T.test_async_roll_goes_to_runner()
   local d = diary()
   local state, rolled = { total = 0 }, {}
   d.controller.deps.memory = roll_memory(state, rolled)
+  stand.next_page_is_key(d.controller)
   page_done(d)
-  d.runner:done(reply("Salandusa", ""))
+  d.runner:done(reply("?", ""))
   run(120)
   t.eq(#d.runner.jobs, 1, "после разблокировки сворачивать нечего")
   state.total = 40
@@ -408,8 +413,9 @@ function T.test_async_followup_waits_for_busy_runner()
   local d = diary()
   local saved = {}
   d.controller.deps.memory = summary_memory(saved)
+  stand.next_page_is_key(d.controller)
   page_done(d)
-  d.runner:done(reply("Salandusa", ""))
+  d.runner:done(reply("?", ""))
   d.runner.cur = { kind = "sync" }
   run(120)
   t.eq(#d.runner.jobs, 1, "пока runner занят, пересказ не стартует")
@@ -424,8 +430,9 @@ function T.test_async_followup_failure_not_saved()
   local d = diary()
   local saved = {}
   d.controller.deps.memory = summary_memory(saved)
+  stand.next_page_is_key(d.controller)
   page_done(d)
-  d.runner:done(reply("Salandusa", ""))
+  d.runner:done(reply("?", ""))
   run(120)
   d.runner:done(nil, "cancelled")
   t.eq(#saved, 0)
@@ -480,8 +487,9 @@ end
 
 -- разблокировка через настоящий runner, пока пересказ не ушёл в дочерний -> pid пересказа
 local function unlock_until_summary(d, sys)
+  stand.next_page_is_key(d.controller)
   page_done(d)
-  sys.reply(#sys.procs, reply("Salandusa", ""))
+  sys.reply(#sys.procs, reply("?", ""))
   for _ = 1, 60 do
     if d.runner:busy() == "summary" then return #sys.procs end
     run(1)
@@ -491,6 +499,7 @@ end
 
 local function summary_diary()
   local d = wired()
+  d.controller = ctl(stand.rules({ key = true, on_sleep = true })) -- сон закрывает печать
   local saved = {}
   d.controller.deps.memory = summary_memory(saved)
   local sys
@@ -596,7 +605,7 @@ end
 -- (91ab2a7 убрал строку-приглашение без печати и ничего не поставил взамен)
 function T.test_greeting_instead_of_invitation_without_seal()
   local d = diary()
-  d.controller = controller.new{ cfg = { password_variants = {} }, random = function() return 1 end, log = nop }
+  d.controller = controller.new{ cfg = { seal = stand.none() }, random = function() return 1 end, log = nop }
   local s = d:invitationText()
   t.ok(in_list(texts.greetings, s), tostring(s))
 end
@@ -633,7 +642,7 @@ end
 local function open_unsealed(random)
   local d = diary()
   d.face_prompt = { ftsize = { getHeightAndAscender = function() return 52, 40 end } }
-  d.controller = controller.new{ cfg = { password_variants = {} }, random = random or function() return 1 end,
+  d.controller = controller.new{ cfg = { seal = stand.none() }, random = random or function() return 1 end,
                                  log = nop }
   return d
 end
@@ -686,7 +695,7 @@ local function gen_diary(whose, ask)
   local path = os.tmpname()
   d.gen_path = path
   d.controller = controller.new{
-    cfg = { whose = not ask and (whose or "Гермиона Грейнджер") or nil, password_variants = {} },
+    cfg = { whose = not ask and (whose or "Гермиона Грейнджер") or nil, seal = stand.none() },
     memory = require("riddle.memory").open(path),
     read_file = function() return "PNG" end,
     b64 = function(s) return "B64" .. s end,
@@ -981,7 +990,7 @@ function T.test_busy_and_thinking_from_controller_pools()
 end
 
 -- ревью ba4087a: персона готова со всеми наборами — фраза каждого набора, которую видит пишущий, берётся из её
--- набора. Строка таблицы: набор, слова печати (nil — без печати), действие пишущего -> показанные фразы. Место,
+-- набора. Строка таблицы: набор, печать по ключу (nil — без печати), действие пишущего -> показанные фразы. Место,
 -- что берёт пул «Методов» мимо ctl:texts(), даёт фразу не из набора персоны
 local CASES = {
   { "thinking", nil, function(d) page_done(d); run(5) end },
@@ -993,9 +1002,11 @@ local CASES = {
   end },
   { "sleepy", nil, function(d) d:respond(nil, function(text) d.revealed[#d.revealed + 1] = text end) end },
   { "greetings", nil, function(d) d.revealed[1] = d:invitationText() end },
-  { "welcomes", { "salandusa" }, function(d) page_done(d); d.runner:done(reply("salandusa", "")); run(120) end },
+  { "welcomes", true, function(d)
+    stand.next_page_is_key(d.controller); page_done(d); d.runner:done(reply("?", "")); run(120)
+  end },
   { "unreadable", nil, function(d) page_done(d); d.runner:done(reply("?", "")); run(120) end },
-  { "unreadable", { "salandusa" }, function(d) page_done(d); d.runner:done(reply("?", "")); run(120) end },
+  { "unreadable", true, function(d) page_done(d); d.runner:done(reply("?", "")); run(120) end },
   { "fail_offline", nil, function(d) page_done(d); d.runner:done(nil, "gemini: offline"); run(120) end },
   { "fail_slow", nil, function(d) page_done(d); d.runner:done(nil, "timeout"); run(120) end },
   { "fail_limit", nil, function(d) page_done(d); d.runner:done(nil, "gemini: http 429"); run(120) end },
@@ -1014,10 +1025,10 @@ function T.test_every_set_shown_from_persona()
   for _, c in ipairs(CASES) do covered[c[1]] = true end
   for _, s in ipairs(texts.SETS) do t.ok(covered[s.name], "строка таблицы на набор " .. s.name) end
   for _, c in ipairs(CASES) do
-    local name, variants, act = c[1], c[2], c[3]
+    local name, sealed, act = c[1], c[2], c[3]
     local d = gen_diary()
     local deps = d.controller.deps
-    deps.cfg.password_variants = variants or {}
+    deps.cfg.seal = sealed and stand.key() or stand.none()
     -- «покупки» подходят к двум книгам дел — переспрос
     deps.knowledge_text = function()
       return nil, nil, nil, { collections = { { id = "c2", title = "ПОКУПКИ НА НЕДЕЛЮ" },
@@ -1786,8 +1797,9 @@ function T.test_no_followup_while_map_open()
   local d = map_diary()
   d.controller.seal.open = false
   d.controller.deps.memory = summary_memory({})
+  stand.next_page_is_key(d.controller)
   page_done(d)
-  d.runner:done(reply("Salandusa", ""))
+  d.runner:done(reply("?", ""))
   t.ok(d.followup_task, "хвост назначен до карты")
   d:openMap("rose")
   run(120)
