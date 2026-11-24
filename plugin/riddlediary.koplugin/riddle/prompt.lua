@@ -43,7 +43,8 @@ local PERSONA_HEAD = [[Ты — дневник Тома Реддла, котор
 -- называются. Без «он/его» о пишущем: гард no_event_spec
 prompt.SEAL_CLOSED = "Печать закрыта: памяти, знаний и задач того, кто пишет, у тебя сейчас нет. Если запись " ..
   "просит то, для чего они нужны (прежние записи, задачи, заметки, вкусы и планы пишущего), скажи в своей роли, что " ..
-  "для этого надо снять печать, и ответь тем, что можешь без них."
+  "для этого надо снять печать, и ответь тем, что можешь без них. Поставь \"needs_data\": true. Иначе " ..
+  "\"needs_data\": false."
 
 -- голос (владелец 2026-10-25: «по диалогу невозможно понять, что это Волдеморт»): узнаётся по содержанию —
 -- своя история, взгляды, лексика, короткие примеры из прошлого до 1979 года; своими словами, без цитат
@@ -454,6 +455,8 @@ function prompt.open(png_b64, ctx)
     parts[#parts + 1] = string.format(prompt.MAP_FORMAT, map_phrase(ctx.map, "open"))
     example = example .. ',"map":""'
   end
+  -- просьба о данных (правило — в SEAL_CLOSED): ключ только при закрытой печати, считает его контроллер
+  if ctx.seal == "closed" then example = example .. ',"needs_data":false' end
   parts[#parts + 1] = string.format(prompt.ANSWER_FORMAT, "{" .. example .. "}")
   if present(ctx.rolling) then parts[#parts + 1] = prompt.ROLLING_HEAD .. "\n" .. str.one_line(ctx.rolling) end
   local recent = ctx.recent or {}

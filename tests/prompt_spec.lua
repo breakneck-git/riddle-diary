@@ -196,6 +196,16 @@ function T.test_prompt_closed_rule()
   end
 end
 
+-- просьба о данных (spec §7, план Task 8): ключ needs_data — правило и пустой ключ в примере ответа только при
+-- закрытой печати; при открытой о нём ни слова
+function T.test_needs_data_only_when_closed()
+  local s = closed()[1].content
+  t.ok(has(s, '"needs_data": true'), "закрытая — правило ставит needs_data")
+  local _, n = s:gsub(',"needs_data":false}', "")
+  t.eq(n, 1, "закрытая — ключ в примере ответа, один раз")
+  t.ok(not has(prompt.open(B64, {})[1].content, "needs_data"), "открытая — ни слова")
+end
+
 -- персонаж — сам дневник Тома Реддла (владелец 2026-10-24), а не «похожий на него» дневник
 function T.test_open_persona_is_tom_riddle()
   local s = prompt.open(B64, {})[1].content
@@ -1537,13 +1547,16 @@ end
 -- персона «Методов» (Kindle владельца) — промпты байт в байт прежние: снимок снят до фичи «чей это дневник»
 -- (спека 2026-10-31, пункт 10). ctx.persona не задан или встроенная «Методов» — тот же текст. Открытая печать
 -- говорит тем же текстом, что и дневник без печати (строка «Печать снята» ушла вместе со словом, spec §7); закрытая —
--- пустой контекст и правило закрытой печати отдельным абзацем после персоны
+-- пустой контекст, правило закрытой печати отдельным абзацем после персоны и ключ needs_data в конце примера ответа
 function T.test_methods_prompts_unchanged()
   local snap = require("fixtures.methods_prompts")
   local C = require("fixtures.methods_ctx")
   local methods = require("riddle.persona").METHODS_VIEW
   local cut = snap.open_empty:find("\n\n", 1, true)
   local closed_snap = snap.open_empty:sub(1, cut + 1) .. prompt.SEAL_CLOSED .. snap.open_empty:sub(cut)
+  local n
+  closed_snap, n = closed_snap:gsub(',"name":""}', ',"name":"","needs_data":false}', 1)
+  t.eq(n, 1, "пример ответа в снимке")
   for _, p in ipairs({ false, methods }) do
     local c = C.open_ctx()
     c.persona = p or nil

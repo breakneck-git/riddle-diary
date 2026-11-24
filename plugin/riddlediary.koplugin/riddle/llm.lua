@@ -288,11 +288,12 @@ function llm.parse(status, body, want_json, format)
   -- task — метка дела из блока задач (prompt.TASK_FORMAT), tasks_source — название книги дел, picks — что советует
   -- ответ (prompt.PICKS_FORMAT); who, world, lang, yes — ответ настройки (prompt.setup): yes — только булево true,
   -- строка "true" согласием не считается; нет — nil; map — действие карты (opt_map); name — как пишущий назвал себя в
-  -- записи (opt_name), пусто — nil
+  -- записи (opt_name), пусто — nil; needs_data — просьба о данных при закрытой печати (prompt.SEAL_CLOSED), как yes —
+  -- только булево true
   return { read = read, reply = fix_homoglyphs(reply), task = opt_string(obj.task),
     tasks_source = opt_string(obj.tasks_source), picks = opt_list(obj.picks), who = opt_text(obj.who),
     world = opt_text(obj.world), lang = opt_lang(obj.lang), yes = obj.yes == true or nil, map = opt_map(obj.map),
-    name = opt_name(obj.name) }
+    name = opt_name(obj.name), needs_data = obj.needs_data == true or nil }
 end
 
 -- квота провайдера в ответе 429: "day" | "minute" | nil (не 429 или признак у провайдера неизвестен). Одно правило на

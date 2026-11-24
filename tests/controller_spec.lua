@@ -676,6 +676,70 @@ function T.test_closed_remember_false_skips_owner_name()
   t.eq(names[1].name, "Гарри")
 end
 
+-- просьба о данных при закрытой печати (план Task 8, spec §7): модель ставит needs_data; 5 просьб за 10 минут — к ответу
+-- фраза texts.key_needed, окно начинается заново. at — время страницы (deps.now), needs — значение needs_data
+local ASK_REPLY = "Для этого сними печать."
+local function ask_data(env, at, needs)
+  env.now_value = at
+  if needs == nil then needs = true end
+  env.script[#env.script + 1] = { read = "что я писал вчера", reply = ASK_REPLY, needs_data = needs }
+  return env:page()
+end
+local function hinted() return ASK_REPLY .. " " .. tostring(texts.key_needed) end
+
+function T.test_key_needed_text()
+  t.eq(texts.key_needed, "Чтобы открыть данные, нарисуй графический ключ.")
+end
+
+function T.test_four_asks_no_hint()
+  local env = data_env()
+  for i, at in ipairs({ 0, 180, 360, 540 }) do t.eq(ask_data(env, 1000 + at), ASK_REPLY, "просьба " .. i) end
+end
+
+function T.test_fifth_ask_hint()
+  local env = data_env()
+  for _, at in ipairs({ 0, 120, 240, 360 }) do t.eq(ask_data(env, 1000 + at), ASK_REPLY) end
+  t.eq(ask_data(env, 1000 + 540), hinted(), "5-я за 9 минут — фраза через пробел после ответа")
+end
+
+-- просьбы старше окна (seal.ASKS_SPAN) уходят: 5 за 11 минут — фразы нет
+function T.test_window_slides()
+  local env = data_env()
+  for i = 0, 4 do t.eq(ask_data(env, 1000 + i * 165), ASK_REPLY, "просьба " .. i + 1) end
+end
+
+function T.test_hint_restarts_window()
+  local env = data_env()
+  for i = 0, 3 do ask_data(env, 1000 + i * 60) end
+  t.eq(ask_data(env, 1240), hinted())
+  for i = 1, 4 do t.eq(ask_data(env, 1240 + i * 60), ASK_REPLY, "после фразы просьба " .. i) end
+end
+
+function T.test_unlock_resets()
+  local env = data_env()
+  for i = 0, 3 do ask_data(env, 1000 + i * 60) end
+  env:unlock()
+  env.ctrl:seal_toggle()
+  t.ok(not env.ctrl.seal_open)
+  t.eq(ask_data(env, 1300), ASK_REPLY, "после ключа счёт заново")
+end
+
+-- needs_data считается только у ответов закрытой печати: при открытой правила нет, поле — мусор модели
+function T.test_open_seal_ignores_needs_data()
+  local env = data_env()
+  env:unlock()
+  for i = 0, 4 do t.eq(ask_data(env, 1000 + i * 60), ASK_REPLY, "открытая, просьба " .. i + 1) end
+  env.ctrl:seal_toggle()
+  t.ok(not env.ctrl.seal_open)
+  t.eq(ask_data(env, 1300), ASK_REPLY, "закрытая — первая просьба")
+end
+
+-- ответ без просьбы (needs_data = false) не считается
+function T.test_needs_data_false_not_counted()
+  local env = data_env()
+  for i = 0, 4 do t.eq(ask_data(env, 1000 + i * 60, false), ASK_REPLY, "ответ " .. i + 1) end
+end
+
 -- связность закрытой печати хранится в окне истории промпта (prompt.MAX_RECENT реплик): старые уходят, новые остаются
 function T.test_closed_turns_window_is_bounded()
   t.eq(prompt.MAX_RECENT, 40, "окно истории промпта")

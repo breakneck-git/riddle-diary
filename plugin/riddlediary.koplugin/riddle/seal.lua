@@ -9,6 +9,10 @@ local seal = {}
 -- рядом с конфигом; в git и в push_config.sh его нет
 seal.KEY_PATH = "/mnt/us/riddle/seal_key.lua"
 
+-- просьбы о данных при закрытой печати (spec §7): ASKS за ASKS_SPAN секунд — к ответу фраза texts.key_needed
+seal.ASKS = 5
+seal.ASKS_SPAN = 600
+
 -- образец: список рисунков, рисунок — список штрихов { p = { x1, y1, … } } -> текст файла. Одни рисунки — один и
 -- тот же текст: повтор записи даёт тот же файл
 function seal.encode(drawings)

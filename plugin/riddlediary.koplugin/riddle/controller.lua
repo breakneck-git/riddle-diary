@@ -16,6 +16,7 @@ local persona = require("riddle.persona")
 local llm = require("riddle.llm")
 local net = require("riddle.net")
 local mapdata = require("riddle.mapdata")
+local window = require("riddle.window")
 local json = require("dkjson")
 
 local Controller = {}
@@ -67,6 +68,9 @@ function Controller.new(deps)
     -- реплики { role, text } с момента закрытия печати: связность разговора без памяти (spec §4). Живут в процессе,
     -- сбрасывает открытие (seal_toggle)
     closed_turns = {},
+    -- времена просьб о данных при закрытой печати (needs_data, spec §7): окно seal.ASKS_SPAN в памяти процесса,
+    -- сбрасывают открытие ключом (_opened) и перезапуск
+    data_asks = {},
     -- растёт на каждом открытии и закрытии печати (_opened, _close): ответ, собранный до сдвига, не
     -- показывается (finish)
     seal_epoch = 0,
@@ -1113,7 +1117,7 @@ function Controller:_answer(job, result, err)
     -- связность закрытой печати; печать успела открыться — список уже сброшен, реплика ему не принадлежит
     if job.closed and not self:_data_ok() then add_closed_turn(self.closed_turns, read, reply) end
     job.answered = true -- реплики записаны: finish проверит, не назрела ли свёртка
-    return reply
+    return self:_data_ask(job, result, reply)
   end
 
   if job.mode == "setup" and job.stage == "confirm" then return self:_confirm_answer(job, result) end
@@ -1130,12 +1134,25 @@ function Controller:_answer(job, result, err)
   end
 end
 
+-- просьба о данных (spec §7): ответ закрытой печати с needs_data = true — в окно просьб; набралось seal.ASKS за
+-- seal.ASKS_SPAN — к ответу через пробел фраза texts.key_needed, окно заново. Считается только запрос, собранный без
+-- данных (job.closed: правило needs_data было только в нём), и только при той же печати (эпоха): ответ сдвинутой
+-- печати не показывается (_settle). Фраза — только на экран: в память и в связность ложится ответ модели
+function Controller:_data_ask(job, result, reply)
+  if not (job.closed and result.needs_data == true and job.epoch == self.seal_epoch) then return reply end
+  if window.push(self.data_asks, self.deps.now(), seal.ASKS_SPAN) < seal.ASKS then return reply end
+  self.data_asks = {}
+  self:_log("riddle: data asks -> key hint")
+  return reply .. " " .. texts.key_needed
+end
+
 -- печать только что открыта ключом (seal_toggle, key_page): данные снова доступны — разговор идёт из памяти,
 -- хвост (лор, пересказ ждущей сессии) положен, как на старте без печати
 function Controller:_opened()
   self:_log("riddle: seal opened by key")
   self.seal_epoch = self.seal_epoch + 1
   self.closed_turns = {}
+  self.data_asks = {}
   self.followup_due = true
 end
 

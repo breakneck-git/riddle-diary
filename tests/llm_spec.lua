@@ -1236,6 +1236,15 @@ function T.test_parse_setup_fields()
   t.eq(r.world, nil); t.eq(r.lang, nil)
 end
 
+-- просьба о данных при закрытой печати (prompt.SEAL_CLOSED, план seal-key Task 8): needs_data доходит до контроллера
+-- только булевым true, как yes
+function T.test_parse_needs_data()
+  t.eq(llm.parse(200, resp('{"read":"x","reply":"ок","needs_data":true}'), true).needs_data, true)
+  t.eq(llm.parse(200, resp('{"read":"x","reply":"ок","needs_data":"true"}'), true).needs_data, nil, "строка — нет")
+  t.eq(llm.parse(200, resp('{"read":"x","reply":"ок","needs_data":false}'), true).needs_data, nil)
+  t.eq(llm.parse(200, resp('{"read":"x","reply":"ок"}'), true).needs_data, nil)
+end
+
 -- пустое после обрезки — не значение (ревью a23cbf2, бэклог 1): `if result.who` не должен срабатывать на ""; lang —
 -- только короткий код, не фраза
 function T.test_parse_setup_fields_empty_and_long_are_nil()
