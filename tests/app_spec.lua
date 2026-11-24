@@ -149,19 +149,20 @@ function T.test_app_wires_clock_into_controller_build_time_log()
   t.ok(line, table.concat(env.logs, "\n"))
 end
 
-function T.test_locked_seal_log_names_answering_provider()
+-- закрытая печать без базы (memory.open упала): ответ модели показан, в devmode — что прочитано и через кого
+function T.test_closed_seal_log_names_answering_provider()
   local env = make(nil, true)
   env.script[1] = { body = resp({ read = "кто ты", reply = "Нет." }) }
-  env.ctrl:on_page(PNG)
-  t.ok(logged(env, 'riddle: locked read "кто ты" via gemini'), table.concat(env.logs, "\n"))
+  t.eq(env.ctrl:on_page(PNG), "Нет.")
+  t.ok(logged(env, 'riddle: open read "кто ты"') and logged(env, "via gemini"), table.concat(env.logs, "\n"))
 end
 
 -- devmode доходит до контроллера через app.new_controller: без него текст read в лог не идёт
 function T.test_seal_log_without_devmode_hides_read_text()
   local env = make()
   env.script[1] = { body = resp({ read = "кто ты", reply = "Нет." }) }
-  env.ctrl:on_page(PNG)
-  t.ok(logged(env, "riddle: locked read 6 chars via gemini"), table.concat(env.logs, "\n"))
+  t.eq(env.ctrl:on_page(PNG), "Нет.")
+  t.ok(not logged(env, "open read"), table.concat(env.logs, "\n"))
   for _, l in ipairs(env.logs) do
     t.ok(not l:find("кто ты", 1, true), "текст read не в логе: " .. l)
   end
@@ -806,7 +807,7 @@ function T.test_remote_payload_carries_logs_and_dead_keys()
   local chain = app.chain(env.deps)
   env.script[1] = { status = 401, body = '{"error":{"message":"API key not valid."}}' }
   env.script[2] = { body = resp({ read = "кто ты", reply = "Я — страницы." }) }
-  local fn = chain:remote_fn(prompt.locked("B64"), true)
+  local fn = chain:remote_fn(prompt.open("B64", { seal = "closed" }), true)
   t.eq(#env.posts, 0, "remote_fn в родителе сети не трогает")
   local payload = via_pipe(fn())
   t.eq(payload.result.reply, "Я — страницы.")
@@ -826,7 +827,7 @@ function T.test_absorb_marks_dead_and_next_call_skips_key()
   local chain = app.chain(env.deps)
   env.script[1] = { status = 401, body = '{"error":{"message":"API key not valid."}}' }
   env.script[2] = { body = resp({ read = "кто ты", reply = "Я — страницы." }) }
-  local payload = via_pipe(chain:remote_fn(prompt.locked("B64"), true)())
+  local payload = via_pipe(chain:remote_fn(prompt.open("B64", { seal = "closed" }), true)())
   local result, err = chain:absorb(payload)
   t.eq(result.reply, "Я — страницы.")
   t.eq(err, nil)
@@ -834,7 +835,7 @@ function T.test_absorb_marks_dead_and_next_call_skips_key()
   t.ok(logged(env, "gemini key 1 -> 401"), "строки дочернего — в лог родителя")
   -- второй вызов стартует с kB (ротация в родителе); kB отказал по 429 — мёртвый kA не пробуем
   env.script[1] = { status = 429, body = '{"error":"rate"}' }
-  chain:call(prompt.locked("B64"), true)
+  chain:call(prompt.open("B64", { seal = "closed" }), true)
   t.eq(#env.posts, 3, "после 429 на kB мёртвый kA не пробуем")
   t.eq(auth_of(env, 3), "Bearer kB")
 end
@@ -851,7 +852,7 @@ function T.test_remote_fn_proxy_overload_skips_direct_gemini_and_logs()
   env.script[1] = { status = 503, body = '{"error":{"code":503,"message":"This model is currently experiencing high '
     .. 'demand.","status":"UNAVAILABLE"}}' }
   env.script[2] = { body = resp({ read = "кто ты", reply = "Я — страницы." }) }
-  local payload = via_pipe(chain:remote_fn(prompt.locked("B64"), true)())
+  local payload = via_pipe(chain:remote_fn(prompt.open("B64", { seal = "closed" }), true)())
   t.eq(payload.result and payload.result.reply, "Я — страницы.", tostring(payload.err))
   t.eq(#env.posts, 2)
   t.ok(env.posts[2].url:find("groq", 1, true), "второй запрос — Groq, не прямой Gemini: " .. env.posts[2].url)
@@ -865,7 +866,7 @@ function T.test_chain_logs_transport_failure_phase()
   local chain = app.chain(env.deps)
   env.script[1] = { err = "wantread", phase = "wait", hang = true }
   env.script[2] = { err = "timeout" }
-  chain:call(prompt.locked("B64"), true)
+  chain:call(prompt.open("B64", { seal = "closed" }), true)
   t.ok(logged(env, "gemini key 1 -> wantread (wait) in "), table.concat(env.logs, "\n"))
 end
 
@@ -876,7 +877,7 @@ function T.test_remote_fn_passes_reply_optional()
   local chain = app.chain(env.deps)
   env.script[1] = { body = resp({ read = "шалость удалась", map = "close" }) }
   env.script[2] = { body = resp({ read = "шалость удалась", reply = "x" }) }
-  local payload = via_pipe(chain:remote_fn(prompt.locked("B64"), true, { reply_optional = true })())
+  local payload = via_pipe(chain:remote_fn(prompt.open("B64", { seal = "closed" }), true, { reply_optional = true })())
   t.eq(#env.posts, 1, "второй ключ не опрашивался")
   t.eq(payload.result.map, "close")
   t.eq(payload.result.reply, "")
@@ -888,7 +889,7 @@ function T.test_remote_fn_rotates_start_key_in_parent()
   local fns = {}
   for i = 1, 3 do
     env.script[i] = { body = resp({ read = "кто ты", reply = "Мои страницы молчат." }) }
-    fns[i] = chain:remote_fn(prompt.locked("B64"), true) -- все созданы в родителе до запуска
+    fns[i] = chain:remote_fn(prompt.open("B64", { seal = "closed" }), true) -- все созданы в родителе до запуска
   end
   for i = 1, 3 do fns[i]() end
   local got = {}
@@ -908,7 +909,7 @@ function T.test_remote_fn_rotates_start_key_across_real_fork()
   local keys = {}
   for _ = 1, 3 do
     local payload
-    runner:start("answer", chain:remote_fn(prompt.locked("B64"), true),
+    runner:start("answer", chain:remote_fn(prompt.open("B64", { seal = "closed" }), true),
       { timeout_s = 5, on_done = function(p) payload = p end })
     loop.run(0.5)
     t.ok(payload, "ответ дочернего пришёл")
@@ -924,7 +925,7 @@ function T.test_remote_err_is_masked()
   local env = make({ gemini_key = "SECRETKEY123", seal = stand.key() })
   local chain = app.chain(env.deps)
   env.script[1] = { err = "connect failed SECRETKEY123" }
-  local payload = via_pipe(chain:remote_fn(prompt.locked("B64"), true)())
+  local payload = via_pipe(chain:remote_fn(prompt.open("B64", { seal = "closed" }), true)())
   t.eq(payload.result, nil)
   t.ok(payload.err and payload.err:find("***", 1, true), tostring(payload.err))
   t.ok(not payload.err:find("SECRETKEY123", 1, true), payload.err)
@@ -949,7 +950,7 @@ function T.test_remote_answer_budget_25s()
   local env = make()
   t.eq(app.ANSWER_BUDGET_S, 25)
   env.script[1] = { cost = 20, err = "timeout" }
-  local payload = via_pipe(app.chain(env.deps):remote_fn(prompt.locked("B64"), true)())
+  local payload = via_pipe(app.chain(env.deps):remote_fn(prompt.open("B64", { seal = "closed" }), true)())
   t.eq(#env.posts, 1)
   t.eq(env.posts[1].timeout_s, 25, "единственный провайдер — весь бюджет ответа")
   t.eq(payload.result, nil)
@@ -963,18 +964,18 @@ function T.test_remote_answer_attempt_ceiling_by_answer_size()
   local chain = app.chain(env.deps)
   env.script[1] = { hang = true, err = "wantread", phase = "wait" }
   env.script[2] = { body = resp({ read = "кто ты", reply = "Я — страницы." }) }
-  local payload = via_pipe(chain:remote_fn(prompt.locked("B64"), true)())
+  local payload = via_pipe(chain:remote_fn(prompt.open("B64", { seal = "closed" }), true)())
   t.eq(payload.result.reply, "Я — страницы.")
   t.eq(env.posts[1].timeout_s, 10.5, "Gemini на пути ответа (200 токенов) ждёт до 10,5 с")
   t.eq(env.posts[2].timeout_s, 14.5, "BeatAPI — остаток бюджета 25 с")
   env.script[1] = { hang = true, err = "wantread" }
   env.script[2] = { body = resp({ read = "кто ты", reply = "Я — страницы." }) }
-  via_pipe(chain:remote_fn(prompt.locked("B64"), false, { max_tokens = 1500 })())
+  via_pipe(chain:remote_fn(prompt.open("B64", { seal = "closed" }), false, { max_tokens = 1500 })())
   t.eq(env.posts[3].timeout_s, 12, "пересказ (1500 токенов) — прежний потолок 12 с")
   -- синхронный вызов той же цепочки — прежние 4 с на попытку
   env.script[1] = { cost = 4, err = "timeout" }
   env.script[2] = { body = resp({ read = "кто ты", reply = "Я — страницы." }) }
-  chain:call(prompt.locked("B64"), true)
+  chain:call(prompt.open("B64", { seal = "closed" }), true)
   t.eq(env.posts[5].timeout_s, 4, "синхронный путь — 4 с")
   t.ok(math.abs(env.posts[6].timeout_s - 4) < 0.01, "синхронный путь — остаток бюджета 8 с: " .. env.posts[6].timeout_s)
 end
@@ -989,7 +990,7 @@ function T.test_remote_answer_reserve_for_last_provider()
   env.script[1] = { hang = true, err = "timeout" }
   env.script[2] = { hang = true, err = "timeout" }
   env.script[3] = { body = resp({ read = "кто ты", reply = "Я — страницы." }) }
-  local payload = via_pipe(chain:remote_fn(prompt.locked("B64"), true)())
+  local payload = via_pipe(chain:remote_fn(prompt.open("B64", { seal = "closed" }), true)())
   t.eq(payload.result.reply, "Я — страницы.")
   t.eq(#env.posts, 3)
   t.ok(env.posts[2].url:find("groq", 1, true))
@@ -1355,7 +1356,7 @@ end
 function T.test_remote_fn_temperature_only_from_opts()
   local env = make()
   env.script[1] = { body = resp({ read = "привет", reply = "Здравствуй." }) }
-  via_pipe(app.chain(env.deps):remote_fn(prompt.locked("B64"), true)())
+  via_pipe(app.chain(env.deps):remote_fn(prompt.open("B64", { seal = "closed" }), true)())
   t.eq(json.decode(env.posts[1].body).temperature, 0.8, "ответ дневника")
   env.script[1] = { body = json.encode({ choices = { { message = { content = "{}" }, finish_reason = "stop" } } }) }
   local p = via_pipe(app.chain(env.deps):remote_fn({ { role = "user", content = "x" } }, false,
@@ -1723,7 +1724,7 @@ function T.test_remote_gen_budget_and_attempt()
   t.eq(env.posts[2].timeout_s, 30, "BeatAPI — остаток бюджета 50 с")
   env.script[1] = { hang = true, err = "timeout" }
   env.script[2] = { body = resp({ read = "кто ты", reply = "Я — страницы." }) }
-  chain:remote_fn(prompt.locked("B64"), true)()
+  chain:remote_fn(prompt.open("B64", { seal = "closed" }), true)()
   t.eq(env.posts[3].timeout_s, 10.5, "путь ответа — 10,5 с по длине ответа")
 end
 
@@ -1829,7 +1830,7 @@ function T.test_remote_answer_hung_proxy_capped_direct_gemini_gets_10_5s()
   env.script[1] = { hang = true, err = "timeout" }
   env.script[2] = { hang = true, err = "timeout" }
   env.script[3] = { body = resp({ read = "кто ты", reply = "Я — страницы." }) }
-  local payload = via_pipe(app.chain(env.deps):remote_fn(prompt.locked("B64"), true)())
+  local payload = via_pipe(app.chain(env.deps):remote_fn(prompt.open("B64", { seal = "closed" }), true)())
   t.eq(payload.result.reply, "Я — страницы.")
   t.eq(env.posts[1].timeout_s, 7, "прокси — потолок 7 с")
   t.ok(env.posts[2].url:find("generativelanguage", 1, true))
@@ -1843,7 +1844,7 @@ function T.test_sync_call_proxy_not_capped_by_answer_ceiling()
   local env = make(proxy_cfg(nil, { BEAT }))
   env.script[1] = { hang = true, err = "timeout" }
   env.script[2] = { body = resp({ read = "кто ты", reply = "Я — страницы." }) }
-  app.chain(env.deps):call(prompt.locked("B64"), true)
+  app.chain(env.deps):call(prompt.open("B64", { seal = "closed" }), true)
   t.eq(env.posts[1].timeout_s, 4, "синхронно — 4 с, как прежде")
 end
 

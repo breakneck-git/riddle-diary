@@ -7,6 +7,9 @@ local T = {}
 
 local function dump(messages) return json.encode(messages) end
 
+-- запрос при закрытой печати, каким его собирает контроллер (Controller:_open_context): без данных пишущего
+local function closed(view) return prompt.open(B64, { seal = "closed", persona = view }) end
+
 local function has(s, needle) return s:find(needle, 1, true) ~= nil end
 
 local function last_image(messages)
@@ -16,21 +19,18 @@ local function last_image(messages)
   end
 end
 
-function T.test_locked_has_no_secrets()
-  local s = dump(prompt.locked(B64))
-  -- запретный перечень подталкивает модель их упоминать
-  for _, bad in ipairs({ "парол", "Парол", "тайн", "Тайн", "хозяйк", "Хозяйк", "ключ", "Ключ" }) do
-    t.ok(not has(s, bad), "в закрытом промпте не должно быть: " .. bad)
+-- правило закрытой печати: запретный перечень подталкивает модель их упоминать; как снимается печать, роль не учит
+function T.test_closed_rule_has_no_secrets()
+  for _, bad in ipairs({ "парол", "Парол", "тайн", "Тайн", "хозяйк", "Хозяйк", "ключ", "Ключ", "лишь той" }) do
+    t.ok(not has(prompt.SEAL_CLOSED, bad), "в правиле закрытой печати не должно быть: " .. bad)
   end
+  local s = dump(closed())
   t.ok(has(s, "без рода"), "к тому, кто пишет, — без рода")
-  t.ok(not has(s, "лишь той"), "печать не открывается «той, кому принадлежит»")
   t.ok(has(s, '"?"') or has(s, '\\"?\\"'), "формат: нераспознанное -> ?")
-  t.ok(has(s, "read") and has(s, "reply"), "формат ответа read/reply")
-  t.eq(last_image(prompt.locked(B64)), "data:image/png;base64," .. B64)
+  t.eq(last_image(closed()), "data:image/png;base64," .. B64)
 end
 
--- правило о роде и строка про "?" — разными строками: после [[ Lua съедает перевод строки
--- n символов UTF-8 с начала строки / с конца строки
+-- n символов UTF-8 с начала строки
 local function head_chars(str, n)
   local i, c = 1, 0
   while i <= #str and c < n do
@@ -41,33 +41,7 @@ local function head_chars(str, n)
   return str:sub(1, i - 1)
 end
 
-local function tail_chars(str, n)
-  local j, c = #str + 1, 0
-  while j > 1 and c < n do
-    j = j - 1
-    while j > 1 and str:byte(j) >= 128 and str:byte(j) < 192 do j = j - 1 end
-    c = c + 1
-  end
-  return str:sub(j)
-end
 
-function T.test_locked_rule_lines_not_glued()
-  local s = prompt.locked(B64)[1].content
-  local at = s:find("Если запись не разобрана", 1, true)
-  local around = at and ("…" .. tail_chars(s:sub(1, at - 1), 40) .. "|" .. head_chars(s:sub(at), 40) .. "…")
-    or "строки «Если запись не разобрана» нет"
-  t.ok(s:find("всё так же без рода.\nЕсли запись не разобрана", 1, true), "правила склеены или перенос потерян: " .. around)
-end
-
-function T.test_locked_ignores_context()
-  -- locked берёт у персонажа только язык, род и имя: ни образ, ни мир, ни лор, ни память в него не попадают
-  local m = prompt.locked(B64, { lang = "en", lang_name = "английский", gender = "f", kind = "книжка",
-    head = "ГОЛОВА-МАРКЕР", body = "ТЕЛО-МАРКЕР", lore = "ЛОР-МАРКЕР", summaries = { "ПЕРЕСКАЗ-МАРКЕР" } })
-  local s = dump(m)
-  t.ok(not has(s, "ЛОР-МАРКЕР"), "лор в закрытом промпте")
-  t.ok(not has(s, "ПЕРЕСКАЗ-МАРКЕР"), "пересказ в закрытом промпте")
-  t.ok(not has(s, "ГОЛОВА-МАРКЕР") and not has(s, "ТЕЛО-МАРКЕР"), "образ персонажа в закрытом промпте")
-end
 
 function T.test_open_has_context()
   local ctx = {
@@ -111,7 +85,7 @@ function T.test_open_has_no_game()
     end
     t.ok(has(s, '"read":"?"'), "формат read остался")
   end
-  t.ok(not has(prompt.locked(B64)[1].content, "РУНА"), "закрытая печать без рун")
+  t.ok(not has(closed()[1].content, "РУНА"), "закрытая печать без рун")
   -- лор — знание дневника, не «сюжет игры»
   local s = prompt.open(B64, { lore = "ЛОР-МАРКЕР" })[1].content
   t.ok(has(s, "ЛОР-МАРКЕР"), "лор в промпте")
@@ -154,7 +128,7 @@ function T.test_open_history_line()
   local at = s:find(HISTORY_LINE, 1, true)
   t.ok(at and not s:find("\n", at, true), "строка — последней в системном промпте, сразу перед историей")
   t.ok(not has(prompt.open(B64, {})[1].content, HISTORY_LINE), "без истории — без строки")
-  t.ok(not has(prompt.locked(B64)[1].content, HISTORY_LINE), "закрытая печать — без строки")
+  t.ok(not has(closed()[1].content, HISTORY_LINE), "закрытая печать — без строки")
 end
 
 -- на просьбу о совете, выборе или списке — ответ по существу, а не встречный вопрос (тот же прогон:
@@ -164,8 +138,6 @@ function T.test_open_answers_requests_not_questions()
   t.ok(has(s, "На просьбу о совете, выборе или списке отвечай из памяти по существу"), "просьба — ответом")
   t.ok(has(s, "Вопрос в ответ — не в каждом ответе, только когда вопрос двигает разговор"), "вопрос не обязателен")
   t.ok(not has(s, "иногда спрашивай в ответ"), "старое правило о вопросе снято")
-  local l = prompt.locked(B64)[1].content
-  t.ok(not has(l, "На просьбу о совете") and not has(l, "Вопрос в ответ"), "закрытая печать без правила")
 end
 
 function T.test_summarize()
@@ -203,19 +175,25 @@ function T.test_summarize_with_earlier()
   end
 end
 
--- печати нет (слова в конфиге нет, 2026-10-25): модель не слышит ни о печати, ни о слове
+-- печати нет или она открыта: модель не слышит ни о печати, ни о слове (spec §7 — правило только у закрытой)
 function T.test_open_without_seal_never_mentions_seal()
-  for _, ctx in ipairs({ { sealed = false }, {} }) do
-    local s = prompt.open(B64, ctx)[1].content
-    for _, w in ipairs({ "печат", "Печат", "заветн", "пароль", "загадк" }) do
-      t.ok(not has(s, w), "без печати в промпте: " .. w)
-    end
+  local s = prompt.open(B64, {})[1].content
+  for _, w in ipairs({ "печат", "Печат", "заветн", "пароль", "загадк" }) do
+    t.ok(not has(s, w), "без печати в промпте: " .. w)
   end
 end
 
--- печать есть и снята: дневник знает, что теперь говорит свободно
-function T.test_open_with_seal_says_it_is_off()
-  t.ok(has(prompt.open(B64, { sealed = true })[1].content, "Печать снята"))
+-- закрытая печать (spec §7): правило в system — у «Методов» и у сгенерированной персоны; без ctx.seal его нет
+function T.test_prompt_closed_rule()
+  t.ok(type(prompt.SEAL_CLOSED) == "string" and has(prompt.SEAL_CLOSED, "Печать закрыта"), "правило есть")
+  local gen = { id = 7, head = "дневник ГОЛОВА.", body = "ТЕЛО.", lang = "ru", gender = "f" }
+  for _, p in ipairs({ false, gen }) do
+    local closed = prompt.open(B64, { seal = "closed", persona = p or nil })[1].content
+    t.ok(has(closed, prompt.SEAL_CLOSED), "закрытая — правило")
+    t.ok(not has(closed, "Печать снята"), "закрытая — без «печать снята»")
+    local open = prompt.open(B64, { persona = p or nil })[1].content
+    t.ok(not has(open, prompt.SEAL_CLOSED), "без ctx.seal — правила нет")
+  end
 end
 
 -- персонаж — сам дневник Тома Реддла (владелец 2026-10-24), а не «похожий на него» дневник
@@ -229,7 +207,7 @@ end
 -- самого» — модель склеила обрывок примера «у тебя» и выдала род через «самого». Правило о роде:
 -- примеры — целые фразы, «сам/сама» о пишущем под запретом
 function T.test_gender_rule_examples_are_whole_phrases()
-  for name, s in pairs({ open = prompt.open(B64, {})[1].content, locked = prompt.locked(B64)[1].content }) do
+  for name, s in pairs({ open = prompt.open(B64, {})[1].content, locked = closed()[1].content }) do
     t.ok(has(s, "«сам»") and has(s, "«сама»"), name .. ": запрет «сам/сама» о пишущем")
     t.ok(not has(s, "«у тебя»"), name .. ": обрывок «у тебя» как пример")
     t.ok(has(s, "«тебя это тревожит»"), name .. ": пример — целая фраза")
@@ -279,7 +257,7 @@ end
 -- трёх мест: пример рода «настоящее время и вопросы», «одним точным вопросом» и «расспрашивай» в персоне,
 -- «один вопрос» в лоре. Вопрос — инструмент, не обязанность; род по-прежнему закрыт другими средствами
 function T.test_no_forced_question()
-  for name, s in pairs({ open = prompt.open(B64, {})[1].content, locked = prompt.locked(B64)[1].content }) do
+  for name, s in pairs({ open = prompt.open(B64, {})[1].content, locked = closed()[1].content }) do
     for _, bad in ipairs({ "и вопросы", "одним точным вопросом", "расспрашивай", "расспроси", "один вопрос" }) do
       t.ok(not has(s, bad), name .. ": навязанный вопрос: " .. bad)
     end
@@ -299,10 +277,6 @@ function T.test_open_voice_from_own_history()
     "Слизерин", "Дамблдор", "короткий пример из своего прошлого", "без длинных цитат" }) do
     t.ok(has(s, w), "голос Волдеморта: " .. w)
   end
-  local l = prompt.locked(B64)[1].content
-  for _, w in ipairs({ "Волдеморт", "бессмерт", "Слизерин", "приют", "Дамблдор" }) do
-    t.ok(not has(l, w), "закрытая печать о себе молчит: " .. w)
-  end
 end
 
 -- однообразие (тестер 2026-10-25, 14 ответов): «партия/ход» в 6 ответах, «Меня зовут Том Реддл, но …»
@@ -314,8 +288,7 @@ function T.test_open_does_not_repeat_own_images()
     "не чаще раза за разговор", "как ты представляешься" }) do
     t.ok(has(s, w), "без повторов: " .. w)
   end
-  for name, other in pairs({ locked = prompt.locked(B64)[1].content,
-    summarize = prompt.summarize({ { role = "owner", text = "x" } })[1].content }) do
+  for name, other in pairs({ summarize = prompt.summarize({ { role = "owner", text = "x" } })[1].content }) do
     t.ok(not has(other, "не чаще раза за разговор"), name .. ": правило повторов не нужно")
   end
 end
@@ -337,17 +310,16 @@ function T.test_open_speaks_of_knowledge_as_memory()
   for _, w in ipairs({ "«заложено»", "«данные»", "«загружено»" }) do
     t.ok(has(open, w), "запрещённое слово примером: " .. w)
   end
-  local full = prompt.open(B64, { knowledge = "x", lore = "x", summaries = { "x" }, sealed = true,
+  local full = prompt.open(B64, { knowledge = "x", lore = "x", summaries = { "x" },
     recent = { { role = "owner", text = "x" } } })[1].content
   local bare = full:gsub("«.-»", " ")
   for _, w in ipairs({ "заложен", "загружен", "данные", "данных" }) do
     t.ok(not has(bare, w), "техническое слово о себе вне примеров: " .. w)
   end
-  t.ok(not has(prompt.locked(B64)[1].content, "«заложено»"), "закрытая печать о своём знании молчит")
 end
 
 -- знания из Notion (срез 4) ---------------------------------------------------
-local FULL = { lore = "ЛОР-МАРКЕР", summaries = { "ПЕРЕСКАЗ-МАРКЕР" }, sealed = true,
+local FULL = { lore = "ЛОР-МАРКЕР", summaries = { "ПЕРЕСКАЗ-МАРКЕР" },
   recent = { { role = "owner", text = "ЗАПИСЬ" }, { role = "diary", text = "ОТВЕТ" } } }
 
 local function with(ctx, k)
@@ -398,7 +370,7 @@ function T.test_knowledge_does_not_contradict_memory_end()
   local part = knowledge_part("ЗНАНИЕ-МАРКЕР")
   t.ok(has(part, "не спорит с твоей собственной памятью"), "знание не спорит с памятью")
   t.ok(has(part, "когда речь о мире пишущего, опирайся на это знание"), "опирайся на знание о мире пишущего")
-  t.ok(not has(prompt.locked(B64)[1].content, "не спорит с твоей собственной памятью"), "закрытая печать без знания")
+  t.ok(not has(closed()[1].content, "не спорит с твоей собственной памятью"), "закрытая печать без знания")
 end
 
 function T.test_knowledge_section_and_rules()
@@ -438,7 +410,7 @@ local function lore_lines(n)
 end
 
 local function big_ctx()
-  return { lore = lore_lines(100), knowledge = docs(20, 20), summaries = { "ПЕРЕСКАЗ-МАРКЕР" }, sealed = true,
+  return { lore = lore_lines(100), knowledge = docs(20, 20), summaries = { "ПЕРЕСКАЗ-МАРКЕР" },
     recent = { { role = "owner", text = "ЗАПИСЬ-1" }, { role = "diary", text = "ОТВЕТ-1" },
                { role = "owner", text = "ЗАПИСЬ-2" } } }
 end
@@ -462,7 +434,7 @@ function T.test_fit_without_limit_or_under_it_returns_same_messages()
   local m = prompt.open(B64, big_ctx())
   t.ok(rawequal(prompt.fit(m, nil), m), "без лимита — тот же запрос")
   t.ok(rawequal(prompt.fit(m, prompt.chars(m)), m), "ровно в лимит — тот же запрос")
-  local locked = prompt.locked(B64)
+  local locked = closed()
   t.ok(rawequal(prompt.fit(locked, 10), locked), "без знания и лора резать нечего")
 end
 
@@ -781,7 +753,7 @@ function T.test_task_format_only_with_block()
   -- прямой вопрос не о делах — своё значение: по нему напоминание откладывается (владелец 2026-10-26, 812f)
   t.ok(has(prompt.TASK_FORMAT, '"task":"ask"') and has(prompt.TASK_FORMAT, "вопрос или просьба"), "вопрос не о делах")
   t.ok(not has(prompt.open(B64, tasks_ctx(nil))[1].content, prompt.TASK_FORMAT), "без блока — без правила")
-  t.ok(not has(prompt.locked(B64)[1].content, prompt.TASK_FORMAT), "закрытая печать — без правила")
+  t.ok(not has(closed()[1].content, prompt.TASK_FORMAT), "закрытая печать — без правила")
 end
 
 -- Groq (max_input_chars): знание и лор режутся, блок задач и правило task — целиком
@@ -1190,9 +1162,9 @@ function T.test_answer_example_one_with_all_keys()
   t.ok(has(prompt.TITLES_FORMAT, '"tasks_source":"reset"') and has(prompt.TITLES_FORMAT, '"tasks_source":""'),
     "сброс и пусто")
   t.ok(not has(prompt.TITLES_FORMAT, "этого ключа не добавляй"), "ключ не условный")
-  -- закрытая печать — прежний формат read/reply
-  local locked = prompt.locked(B64)[1].content
-  t.ok(has(locked, '{"read":"...","reply":"..."}') and not has(locked, '"task"'), "закрытая печать без новых ключей")
+  -- закрытая печать — без задач, без их ключей
+  local locked = closed()[1].content
+  t.ok(not has(locked, '"task"') and not has(locked, '"tasks_source"'), "закрытая печать без ключей задач")
 end
 
 function T.test_titles_section_and_rule_only_with_titles()
@@ -1215,7 +1187,7 @@ function T.test_titles_section_and_rule_only_with_titles()
     e.titles = titles
     t.eq(dump(prompt.open(B64, e)), base, "без названий — без раздела и правила")
   end
-  t.ok(not has(prompt.locked(B64)[1].content, prompt.TITLES_FORMAT), "закрытая печать — без правила")
+  t.ok(not has(closed()[1].content, prompt.TITLES_FORMAT), "закрытая печать — без правила")
 end
 
 function T.test_titles_section_after_tasks_before_summaries()
@@ -1426,7 +1398,7 @@ function T.test_picks_key_before_reply_with_knowledge()
   t.ok(has(s, "\n\n" .. prompt.PICKS_FORMAT .. "\n\n"), "своей строкой")
   t.ok(has(prompt.PICKS_FORMAT, '"picks":[]'), "ничего не советуешь — пустой массив")
   t.ok(not has(prompt.open(B64, {})[1].content, '"picks"'), "без знания — без ключа")
-  t.ok(not has(prompt.locked(B64)[1].content, '"picks"'), "закрытая печать — без ключа")
+  t.ok(not has(closed()[1].content, '"picks"'), "закрытая печать — без ключа")
 end
 
 -- в плагине нет слов данных (названий статусов): поправка — шаблон, значение подставляет контроллер из документа
@@ -1563,23 +1535,23 @@ function T.test_gen_map_and_cast_requests()
 end
 
 -- персона «Методов» (Kindle владельца) — промпты байт в байт прежние: снимок снят до фичи «чей это дневник»
--- (спека 2026-10-31, пункт 10). ctx.persona не задан или встроенная «Методов» — тот же текст
+-- (спека 2026-10-31, пункт 10). ctx.persona не задан или встроенная «Методов» — тот же текст. Открытая печать
+-- говорит тем же текстом, что и дневник без печати (строка «Печать снята» ушла вместе со словом, spec §7); закрытая —
+-- пустой контекст и правило закрытой печати отдельным абзацем после персоны
 function T.test_methods_prompts_unchanged()
   local snap = require("fixtures.methods_prompts")
   local C = require("fixtures.methods_ctx")
   local methods = require("riddle.persona").METHODS_VIEW
+  local cut = snap.open_empty:find("\n\n", 1, true)
+  local closed_snap = snap.open_empty:sub(1, cut + 1) .. prompt.SEAL_CLOSED .. snap.open_empty:sub(cut)
   for _, p in ipairs({ false, methods }) do
-    local function ctx(sealed)
-      local c = C.open_ctx(sealed)
-      c.persona = p or nil
-      return c
-    end
-    t.eq(prompt.open(B64, ctx(true))[1].content, snap.open_sealed, "open, печать")
-    t.eq(prompt.open(B64, ctx(false))[1].content, snap.open_unsealed, "open, без печати")
+    local c = C.open_ctx()
+    c.persona = p or nil
+    t.eq(prompt.open(B64, c)[1].content, snap.open_full, "open, все разделы")
     t.eq(prompt.open(B64, { persona = p or nil })[1].content, snap.open_empty, "open, пустой контекст")
+    t.eq(closed(p or nil)[1].content, closed_snap, "закрытая печать")
   end
   for _, v in ipairs({ false, methods }) do
-    t.eq(prompt.locked(B64, v or nil)[1].content, snap.locked, "locked")
     t.eq(prompt.summarize(C.entries, "РАНЬШЕ", v or nil)[1].content, snap.summarize, "summarize")
     t.eq(prompt.roll("РАНЬШЕ", C.entries, v or nil)[1].content, snap.roll, "roll")
   end
@@ -1623,8 +1595,8 @@ function T.test_map_format_only_with_ctx_map()
   local map = methods_map()
   local cases = {
     { ctx = function() return { persona = methods } end, snap = snap.open_empty },
-    { ctx = function() local c = C.open_ctx(true) c.persona = methods return c end, snap = snap.open_sealed },
-    { ctx = function() return C.open_ctx(false) end, snap = snap.open_unsealed },
+    { ctx = function() local c = C.open_ctx() c.persona = methods return c end, snap = snap.open_full },
+    { ctx = function() return C.open_ctx() end, snap = snap.open_full },
   }
   for _, case in ipairs(cases) do
     t.eq(prompt.open(B64, case.ctx())[1].content, case.snap, "без ctx.map — снимок прежний")
@@ -1673,7 +1645,7 @@ function T.test_name_format_in_open_seal()
   t.ok(has(prompt.open(B64, full)[1].content, ',"tasks_source":"","name":"","map":""}'), "порядок ключей примера")
   t.ok(has(prompt.NAME_FORMAT, '"name":""'), "пусто, если не назвался")
   t.ok(has(prompt.NAME_FORMAT, "называет себя"), "как пишущий называет себя")
-  for what, s in pairs({ locked = prompt.locked(B64)[1].content, setup = prompt.setup(B64)[1].content,
+  for what, s in pairs({ setup = prompt.setup(B64)[1].content,
       map_read = prompt.map_read(B64, methods_map())[1].content,
       summarize = prompt.summarize({ { role = "owner", text = "x" } })[1].content,
       roll = prompt.roll("РАНЬШЕ", { { role = "owner", text = "x" } })[1].content }) do
@@ -1734,9 +1706,8 @@ end
 -- сгенерированная персона: её голова и тело вместо Волдеморта, общие правила формы — те же, что у «Методов»
 function T.test_generated_persona_in_open()
   local view = { id = 7, head = "дневник ГОЛОВА-МАРКЕР.", body = "ТЕЛО-МАРКЕР.", lang = "ru", gender = "f" }
-  local s = prompt.open(B64, { persona = view, sealed = true })[1].content
+  local s = prompt.open(B64, { persona = view })[1].content
   t.ok(s:find("^Ты — дневник ГОЛОВА%-МАРКЕР%."), s:sub(1, 80))
-  t.ok(has(s, "Печать снята"), "печать снята — как у «Методов»")
   t.ok(has(s, "ТЕЛО-МАРКЕР."), "тело персоны")
   t.ok(not has(s, "Волдеморт") and not has(s, "Реддл"), "нет Волдеморта")
   for _, rule in ipairs({ "1–3 предложения", "без эмодзи и без markdown", "Никогда не называй себя ИИ",
@@ -1755,33 +1726,22 @@ local function with_gender(view, g)
   return v
 end
 
-function T.test_locked_prompt_english_female()
-  local s = prompt.locked(B64, EN_F)[1].content
-  t.ok(not has(s, "по-русски"), "английская персона — не «по-русски»")
-  t.ok(not has(s, "мужском"), "женский род — не «мужском»")
-  t.ok(has(s, "английский"), "язык ответа — lang_name")
-  t.ok(has(s, "женском роде («поняла», «ждала»)"), "род — женский")
-  t.ok(has(s, "Ты — записная книжка"), "чем себя считает — kind")
-  t.ok(not has(s, "магический дневник"), "«магический дневник» — только у «Методов»")
-  -- форма ответа и правила пишущего — те же, что у «Методов»
-  t.ok(has(s, '{"read":"...","reply":"..."}') and has(s, "обращайся на «ты» и без рода"), "формат и правило рода")
-  t.eq(prompt.locked(B64, EN_F)[2].content[2].image_url.url, "data:image/png;base64," .. B64, "картинка та же")
-end
-
-function T.test_locked_prompt_gender_and_language_follow_view()
-  local m = prompt.locked(B64, with_gender(EN_F, "m"))[1].content
+-- закрытая печать говорит голосом персонажа (spec §4: тот же ответ, только без данных): язык, род, образ — её
+function T.test_closed_prompt_speaks_in_persona_voice()
+  local s = closed(EN_F)[1].content
+  t.ok(has(s, "Ты — дневник Гермионы.") and has(s, "Характер: ГОЛОС."), "образ персонажа")
+  t.ok(has(s, "английский") and not has(s, "по-русски"), "язык ответа — lang_name")
+  t.ok(has(s, "женском роде («поняла», «ждала»)") and not has(s, "мужском"), "род — женский")
+  t.ok(has(s, prompt.SEAL_CLOSED), "правило закрытой печати")
+  local m = closed(with_gender(EN_F, "m"))[1].content
   t.ok(has(m, "мужском роде («понял», «ждал»)") and not has(m, "женском"), "m — мужской")
-  local n = prompt.locked(B64, with_gender(EN_F, "n"))[1].content
-  t.ok(has(n, "о себе без рода") and not has(n, "мужском") and not has(n, "женском"), "n — без рода")
-  local ru = prompt.locked(B64, { lang = "ru", lang_name = "русский", gender = "f", kind = "дневник" })[1].content
-  t.ok(has(ru, "по-русски") and has(ru, "женском"), "русская персона — по-русски")
 end
 
 -- персонажа нет (вопрос «чей дневник», запись во время генерации): язык записи, о себе без рода
 function T.test_service_prompts_without_persona_use_record_language()
   local none = { none = true }
   local entries = { { role = "owner", text = "ЗАП" }, { role = "diary", text = "ОТВ" } }
-  for name, s in pairs({ locked = prompt.locked(B64, none)[1].content,
+  for name, s in pairs({
       summarize = prompt.summarize(entries, nil, none)[1].content,
       roll = prompt.roll(nil, entries, none)[1].content }) do
     t.ok(has(s, "на языке записи"), name .. ": язык записи")

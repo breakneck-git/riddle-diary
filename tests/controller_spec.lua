@@ -5,6 +5,7 @@ local prompt = require("riddle.prompt")
 local controller = require("riddle.controller")
 local llm = require("riddle.llm")
 local config = require("riddle.config")
+local tasks = require("riddle.tasks")
 
 local T = {}
 
@@ -161,19 +162,18 @@ local function make(opts)
 end
 
 local function system_of(call) return call.messages[1].content end
-local LOCKED_SYSTEM = prompt.locked("x")[1].content
-local function is_locked_call(call) return system_of(call) == LOCKED_SYSTEM end
+-- запрос собран при закрытой печати: в system правило закрытой печати (prompt.SEAL_CLOSED)
+local function is_closed_call(call) return has(system_of(call), prompt.SEAL_CLOSED) end
 
 -- закрытая печать -----------------------------------------------------------
 
-function T.test_locked_refuse()
+function T.test_closed_page_answered_by_model()
   local env = make()
   env:say("кто ты", "Мои страницы молчат…")
   local text = env:page()
   t.eq(text, "Мои страницы молчат…")
-  t.eq(#env.memory.adds, 0, "в память ничего")
   t.eq(#env.llm_calls, 1)
-  t.ok(is_locked_call(env.llm_calls[1]), "запрос по закрытому промпту")
+  t.ok(is_closed_call(env.llm_calls[1]), "запрос закрытой печати")
   t.eq(env.llm_calls[1].want_json, true)
   t.eq(env.llm_calls[1].opts, nil, "ответ — с потолком провайдера, без потолка пересказа")
   t.ok(has(json.encode(env.llm_calls[1].messages), "B64:PNGBYTES"), "картинка ушла в запрос")
@@ -247,12 +247,13 @@ function T.test_open_begin_logs_build_time()
   t.ok(line:match("chars=%d+$"), line)
 end
 
-function T.test_locked_begin_logs_no_build_time()
+-- закрытая печать собирает тот же запрос (без данных) — и время сборки в лог тоже
+function T.test_closed_begin_logs_build_time()
   local env = make()
-  env.ctrl.deps.clock = function() return 1.000 end
-  env:say("кто ты", "Нет.")
+  local ticks = { 1.000, 1.003 }
+  env.ctrl.deps.clock = function() return table.remove(ticks, 1) or 1.003 end
   t.ok(env.ctrl:begin(PNG), "job есть")
-  t.ok(not logged(env, "prompt built"), table.concat(env.logs, "\n"))
+  t.ok(logged(env, "riddle: prompt built in 3 ms chars="), table.concat(env.logs, "\n"))
 end
 
 -- касание не съедает хвост разблокировки (без печати он ждёт первого настоящего ответа)
@@ -263,37 +264,33 @@ function T.test_tiny_png_keeps_followup_without_seal()
   t.ok(env.ctrl:take_followup(), "хвост остался")
 end
 
--- закрытая печать: что прочла модель и через кого — в лог; текст read — только в devmode, иначе в лог Kindle
--- попадает всё, что написано на странице
-function T.test_locked_logs_read_and_provider_in_devmode()
+-- закрытая печать: что прочла модель и через кого — в лог только в devmode, как у открытой; без него в лог Kindle
+-- не идёт написанное на странице
+function T.test_closed_logs_read_and_provider_in_devmode()
   local env = make({ devmode = true })
   env.script[1] = { read = "кто ты\nвот", reply = "Нет.", via = "gemini" }
   env:page()
-  t.ok(env.logs[1] and has(env.logs[1], 'riddle: locked read "кто ты\\nвот" via gemini'),
-    table.concat(env.logs, "\n"))
+  t.ok(logged(env, 'riddle: open read "кто ты\\nвот"') and logged(env, "via gemini"), table.concat(env.logs, "\n"))
 end
 
-function T.test_locked_log_without_devmode_has_length_not_text()
+function T.test_closed_log_without_devmode_has_no_text()
   local env = make()
   env.script[1] = { read = "кто ты\nвот", reply = "Нет.", via = "gemini" }
   env:page()
-  t.ok(env.logs[1] and has(env.logs[1], "riddle: locked read 10 chars via gemini"),
-    table.concat(env.logs, "\n"))
   for _, l in ipairs(env.logs) do
     t.ok(not has(l, "кто ты") and not has(l, "вот"), "текст read не в логе: " .. l)
   end
 end
 
--- на открытой печати строки locked read нет; без devmode нет и текста read: в лог Kindle не идёт написанное
+-- открытая печать без devmode: текста read в логе нет — в лог Kindle не идёт написанное
 function T.test_open_seal_does_not_log_read()
   for _, devmode in ipairs({ false, true }) do
     local env = make({ devmode = devmode })
     env:unlock()
     env.logs = {}
-    env:say("секретные слова дианы", "Ответ.")
+    env:say("секретные слова", "Ответ.")
     env:page()
     for _, l in ipairs(env.logs) do
-      t.ok(not has(l, "locked read"), "на открытой печати нет строки locked read: " .. l)
       if not devmode then t.ok(not has(l, "секретные слова"), "текст read не в логе: " .. l) end
     end
   end
@@ -393,6 +390,119 @@ function T.test_all_providers_fail_closed()
   t.eq(#env.memory.adds, 0)
 end
 
+-- закрытая печать отсекает данные, дневник отвечает без них (spec §4) ------------------------------
+
+local DATA_MARKS = { "МЕТКА-ЗНАНИЕ", "МЕТКА-ЗАДАЧА", "МЕТКА-ПЕРЕСКАЗ", "МЕТКА-РЕПЛИКА", "МЕТКА-ЛОР" }
+
+-- стенд, где каждое данное пользователя помечено: знание и задача из Notion, пересказ прошлой сессии, реплика
+-- текущей, лор
+local function data_env(opts)
+  opts = opts or {}
+  opts.knowledge_text = function()
+    return "МЕТКА-ЗНАНИЕ", nil, nil, { block = tasks.block({ { id = "id1", title = "МЕТКА-ЗАДАЧА" } }) }
+  end
+  local env = make(opts)
+  local m = env.memory
+  m.lore = "МЕТКА-ЛОР"
+  m.sessions[1] = { id = 1, started = 0, last_ts = 0, summary = "МЕТКА-ПЕРЕСКАЗ" }
+  m:add(1, "owner", "МЕТКА-РЕПЛИКА", 0)
+  m.adds = {}
+  return env
+end
+
+function T.test_closed_seal_sends_no_data()
+  local env = data_env()
+  t.ok(prompt.SEAL_CLOSED, "правило закрытой печати есть")
+  env:say("кто ты", "Без печати не скажу.")
+  t.eq(env:page(), "Без печати не скажу.", "ответ модели показан")
+  t.eq(#env.llm_calls, 1)
+  local s = json.encode(env.llm_calls[1].messages)
+  for _, mark in ipairs(DATA_MARKS) do t.ok(not has(s, mark), "при закрытой печати в запросе " .. mark) end
+  t.ok(has(system_of(env.llm_calls[1]), prompt.SEAL_CLOSED), "в system — правило закрытой печати")
+  t.ok(has(s, "B64:PNGBYTES"), "картинка ушла в запрос")
+  t.ok(not env.ctrl.seal_open)
+end
+
+function T.test_open_seal_sends_data()
+  local env = data_env()
+  env:unlock()
+  env:say("кто ты", "Ответ.")
+  env:page()
+  local s = json.encode(env.llm_calls[1].messages)
+  for _, mark in ipairs(DATA_MARKS) do t.ok(has(s, mark), "при открытой печати в запросе нет " .. mark) end
+  t.ok(not has(system_of(env.llm_calls[1]), prompt.SEAL_CLOSED), "правила закрытой печати нет")
+end
+
+-- связность при закрытой печати — реплики с момента закрытия, из памяти процесса: при remember = false в базе их нет
+function T.test_closed_turns_keep_context()
+  local env = data_env({ seal = { key = true, remember = false } })
+  env:say("ЗАПИСЬ-ЗАКРЫТАЯ-1", "ОТВЕТ-ЗАКРЫТЫЙ-1"); env:page()
+  env:say("вторая", "ответ 2"); env:page()
+  local s = json.encode(env.llm_calls[2].messages)
+  t.ok(has(s, "ЗАПИСЬ-ЗАКРЫТАЯ-1") and has(s, "ОТВЕТ-ЗАКРЫТЫЙ-1"), "первая реплика во втором запросе")
+  for _, mark in ipairs(DATA_MARKS) do t.ok(not has(s, mark), "во втором запросе " .. mark) end
+end
+
+-- открытие сбрасывает реплики закрытой печати: после нового закрытия разговор начинается заново
+function T.test_unlock_resets_closed_turns()
+  local env = data_env({ seal = { key = true, remember = false } })
+  env:say("ЗАПИСЬ-ДО-КЛЮЧА", "ОТВЕТ-ДО-КЛЮЧА"); env:page()
+  env:unlock()
+  env.ctrl:seal_toggle()
+  t.ok(not env.ctrl.seal_open)
+  env:say("после", "ответ"); env:page()
+  local s = json.encode(env.llm_calls[2].messages)
+  t.ok(not has(s, "ЗАПИСЬ-ДО-КЛЮЧА") and not has(s, "ОТВЕТ-ДО-КЛЮЧА"), "реплики до ключа сброшены")
+end
+
+-- ответ владельца 20.11: разговор при закрытой печати по умолчанию пишется в память
+function T.test_closed_remember_default_writes_memory()
+  local env = data_env()
+  env:say("ЗАКРЫТАЯ-ЗАПИСЬ", "ЗАКРЫТЫЙ-ОТВЕТ"); env:page()
+  t.eq(#env.memory.adds, 2, "запись и ответ — в память")
+  t.eq(env.memory.adds[1].text, "ЗАКРЫТАЯ-ЗАПИСЬ")
+  t.eq(env.memory.adds[2].text, "ЗАКРЫТЫЙ-ОТВЕТ")
+end
+
+function T.test_closed_remember_false_skips_memory()
+  local env = data_env({ seal = { key = true, remember = false } })
+  env:say("ЗАКРЫТАЯ-ЗАПИСЬ", "ЗАКРЫТЫЙ-ОТВЕТ")
+  t.eq(env:page(), "ЗАКРЫТЫЙ-ОТВЕТ")
+  t.eq(#env.memory.adds, 0, "remember = false — в память ничего")
+  env:unlock()
+  env:say("открытая", "ответ"); env:page()
+  t.eq(#env.memory.adds, 2, "при открытой — пишется")
+end
+
+-- хвосты при закрытой печати: ни лора, ни пересказа прошлой сессии, ни свёртки — они ждут открытия
+function T.test_closed_followup_no_lore_no_summary()
+  local env = data_env({ now = 5 * 3600 })
+  local read = env.ctrl.deps.read_file
+  local lore_reads = 0
+  env.ctrl.deps.read_file = function(path)
+    if path == LORE then lore_reads = lore_reads + 1 end
+    return read(path)
+  end
+  env.files[LORE] = "## Мир\nНОВЫЙ-ЛОР"
+  env.mtimes[LORE] = 777
+  env.memory.sessions[1].summary = nil -- прошлая сессия ждёт пересказа
+  env.ctrl.followup_due = true
+  env.ctrl.roll_due = true
+  local job = env.ctrl:begin_followup()
+  t.ok(job == nil or job.kind == "gen", "при закрытой — только генерация персоны: " .. tostring(job and job.kind))
+  t.eq(lore_reads, 0, "лор не читался")
+  t.eq(#env.memory.imported, 0, "лор не импортирован")
+  env.ctrl:on_unlocked_followup()
+  t.eq(#env.llm_calls, 0, "синхронный хвост при закрытой модель не зовёт")
+  t.eq(lore_reads, 0, "и лор не читает")
+  t.ok(not env.ctrl:take_followup(), "хвост при закрытой не берётся")
+  env:unlock()
+  t.ok(env.ctrl:take_followup(), "открытие взводит хвост")
+  job = env.ctrl:begin_followup()
+  t.eq(job and job.kind, "session", "после открытия — пересказ ждущей сессии")
+  t.eq(lore_reads, 1, "и лор")
+end
+
 -- открытая печать -----------------------------------------------------------
 
 function T.test_open_writes_memory()
@@ -411,7 +521,7 @@ function T.test_open_writes_memory()
   t.eq(env.memory.adds[1].sid, env.memory.adds[2].sid)
 
   local first = env.llm_calls[1]
-  t.ok(not is_locked_call(first), "открытая печать — другой промпт")
+  t.ok(not is_closed_call(first), "открытая печать — другой промпт")
   t.eq(first.want_json, true)
   local s1 = json.encode(first.messages)
   t.ok(has(s1, "ЛОР-МАРКЕР"), "лор в промпте")
@@ -499,7 +609,7 @@ function T.test_open_page_extra_arg_ignored()
 end
 
 -- закрытая печать: пустой reply — «не разобрала», печать по-прежнему закрыта
-function T.test_locked_empty_reply_is_unreadable()
+function T.test_closed_empty_reply_is_unreadable()
   local env = make()
   env:say("кто ты", "")
   t.ok(in_list(texts.unreadable, env:page()), "пустой отказ — «не разобрала»")
@@ -535,7 +645,7 @@ local FAIL_CASES = {
   { "no providers", "fail_other" },
 }
 
-function T.test_fail_reason_picks_its_pool_open_and_locked()
+function T.test_fail_reason_picks_its_pool_open_and_closed()
   for _, c in ipairs(FAIL_CASES) do
     local env = make()
     env.script = { { fail = c[1] } }
@@ -588,8 +698,7 @@ function T.test_never_raises_and_logs()
   env.script = { { throw = "boom" } }
   local text = env:page()
   t.ok(in_list(texts.fail_other, text), text)
-  t.ok(#env.logs >= 1, "ошибка залогирована")
-  t.ok(has(env.logs[1], "boom"))
+  t.ok(logged(env, "boom"), "ошибка залогирована: " .. table.concat(env.logs, "\n"))
 end
 
 function T.test_llm_call_throws_gives_fail_other_and_removes_png()
@@ -634,7 +743,7 @@ function T.test_no_password_diary_is_open_at_once()
   env:say("привет", "здравствуй")
   t.eq(env:page(), "здравствуй", "ответ — обычный, не приветствие")
   t.eq(#env.llm_calls, 1)
-  t.ok(not is_locked_call(env.llm_calls[1]), "запрос по промпту открытой печати")
+  t.ok(not is_closed_call(env.llm_calls[1]), "запрос по промпту открытой печати")
   t.eq(#env.memory.adds, 2, "страница и ответ — в память")
 end
 
@@ -671,7 +780,7 @@ function T.test_no_password_sleep_does_not_close()
   t.ok(env.ctrl.seal_open, "закрывать нечего")
   env:say("привет", "здравствуй")
   env:page()
-  t.ok(not is_locked_call(env.llm_calls[1]), "после сна всё равно открытый промпт")
+  t.ok(not is_closed_call(env.llm_calls[1]), "после сна всё равно открытый промпт")
 end
 
 -- без разблокировки нет и «после приветствия»: хвост (лор, пересказ) — после первого ответа,
@@ -686,10 +795,12 @@ function T.test_no_password_followup_due_after_start_and_sleep()
   t.ok(env.ctrl:take_followup(), "после сна снова")
 end
 
-function T.test_sealed_take_followup_is_false()
+-- открытие ключом взводит хвост (лор, пересказ), как старт без печати; при закрытой он не берётся
+function T.test_unlock_sets_followup_due()
   local env = make()
+  t.ok(not env.ctrl:take_followup(), "закрытая — хвоста нет")
   env:unlock()
-  t.ok(not env.ctrl:take_followup(), "с печатью хвост идёт по разблокировке, не по этому флагу")
+  t.ok(env.ctrl:take_followup(), "после открытия хвост положен")
 end
 
 -- сон -----------------------------------------------------------------------
@@ -700,12 +811,12 @@ function T.test_sleep_locks()
   env:unlock()
   env:say("привет", "здравствуй")
   env:page()
-  t.ok(not is_locked_call(env.llm_calls[1]))
+  t.ok(not is_closed_call(env.llm_calls[1]))
   env.ctrl:on_sleep()
   t.ok(not env.ctrl.seal_open)
   env:say("кто ты", "закрыто")
   t.eq(env:page(), "закрыто")
-  t.ok(is_locked_call(env.llm_calls[2]), "после сна запрос идёт через prompt.locked")
+  t.ok(is_closed_call(env.llm_calls[2]), "после сна запрос — закрытой печати")
 end
 
 function T.test_sleep_without_on_sleep_keeps_seal_open()
@@ -731,6 +842,7 @@ end
 
 function T.test_followup_lore_and_summary()
   local env = make({ now = 0 })
+  env:unlock() -- хвост — данные: идёт при открытой печати
   local m = env.memory
   m:session(0)
   m:add(1, "owner", "ЗАПИСЬ-ПРОШЛОЙ", 10)
@@ -772,6 +884,7 @@ end
 
 function T.test_followup_failure_is_silent()
   local env = make({ now = 0 })
+  env:unlock() -- хвост — данные: идёт при открытой печати
   local m = env.memory
   m:session(0)
   m:add(1, "owner", "x", 10)
@@ -794,6 +907,7 @@ end
 
 function T.test_followup_empty_session_skipped_without_llm()
   local env = make({ now = 0 })
+  env:unlock() -- хвост — данные: идёт при открытой печати
   local m = env.memory
   m:session(0) -- пустая сессия без записей
   env.now_value = 5 * 3600
@@ -816,6 +930,7 @@ end
 
 function T.test_followup_async_begin_run_finish()
   local env = make({ now = 0 })
+  env:unlock() -- хвост — данные: идёт при открытой печати
   local m = past_session(env)
   env.files[LORE] = "## Мир\nЛОР-ТЕКСТ"
   env.mtimes[LORE] = 777
@@ -841,6 +956,7 @@ end
 function T.test_followup_async_failure_not_saved()
   for _, case in ipairs({ { nil, "timeout" }, { nil, "cancelled" }, { { err = "budget" } }, { { result = { text = "" } } } }) do
     local env = make({ now = 0 })
+    env:unlock() -- хвост — данные: идёт при открытой печати
     local m = past_session(env)
     local job = env.ctrl:begin_followup()
     t.ok(job, "задача есть")
@@ -849,6 +965,7 @@ function T.test_followup_async_failure_not_saved()
     t.ok(env.ctrl:begin_followup(), "пересказ повторится")
   end
   local env = make({ now = 0 })
+  env:unlock() -- хвост — данные: идёт при открытой печати
   past_session(env)
   local job = env.ctrl:begin_followup()
   env.ctrl:finish_followup(job, nil, "timeout")
@@ -860,6 +977,7 @@ end
 
 function T.test_followup_async_empty_session_marked_without_job()
   local env = make({ now = 0 })
+  env:unlock() -- хвост — данные: идёт при открытой печати
   local m = env.memory
   m:session(0)
   env.now_value = 5 * 3600
@@ -871,6 +989,7 @@ end
 
 function T.test_followup_async_remote_fn_failure_is_silent()
   local env = make({ now = 0 })
+  env:unlock() -- хвост — данные: идёт при открытой печати
   past_session(env)
   env.ctrl.deps.remote_fn = function() error("boom") end
   t.eq(env.ctrl:begin_followup(), nil)
@@ -911,10 +1030,10 @@ function T.test_begin_finish_equals_on_page_open()
   same(a, b)
 end
 
-function T.test_begin_finish_equals_on_page_locked()
+function T.test_begin_finish_equals_on_page_closed()
   local a, b = both_ways(function() end,
     { { "кто ты", "отказ 1" }, { "?", "" }, { "кто ты", "" } })
-  t.ok(a.logs:find("locked read", 1, true), a.logs)
+  t.ok(a.adds:find("отказ 1", 1, true), a.adds)
   t.eq(a.open, false)
   same(a, b)
 end
@@ -932,7 +1051,7 @@ end
 function T.test_begin_removes_png_before_answer()
   local env = make()
   local job = env.ctrl:begin(PNG)
-  t.ok(job and job.mode == "locked" and type(job.run) == "function", "job закрытой печати")
+  t.ok(job and job.mode == "open" and job.closed and type(job.run) == "function", "job закрытой печати")
   t.eq(env.removed[1], PNG, "PNG удалён до ответа")
   t.eq(#env.llm_calls, 0, "begin не зовёт модель")
 end
@@ -964,12 +1083,14 @@ function T.test_no_seal_prompt_has_no_seal()
   t.ok(not has(s, "печат") and not has(s, "Печат"), "без печати модель не слышит о печати")
 end
 
-function T.test_unlocked_prompt_says_seal_is_off()
+-- открытая печать — промпт как без печати: правило закрытой ушло, «печать снята» больше не говорится (spec §7)
+function T.test_unlocked_prompt_is_silent_about_seal()
   local env = make()
   env:unlock()
   env:say("привет", "здравствуй")
   env:page()
-  t.ok(has(system_of(env.llm_calls[#env.llm_calls]), "Печать снята"))
+  local s = system_of(env.llm_calls[#env.llm_calls])
+  t.ok(not has(s, "печат") and not has(s, "Печат"), "открытая печать модели не называется")
 end
 
 -- знания из Notion (срез 4): читаются в begin в родителе, только для открытой печати ---------------
@@ -996,16 +1117,16 @@ function T.test_begin_open_includes_knowledge()
   t.ok(has(system_of(env.llm_calls[#env.llm_calls]), "ЗНАНИЕ-МАРКЕР"), "on_page тоже со знанием")
 end
 
-function T.test_begin_locked_has_no_knowledge()
+function T.test_begin_closed_has_no_knowledge()
   local calls = { n = 0 }
   local env = make({ knowledge_text = knowledge_dep(calls, "ЗНАНИЕ-МАРКЕР", "small") })
   local job = env.ctrl:begin(PNG)
-  t.eq(job.mode, "locked")
+  t.ok(job.mode == "open" and job.closed, "запрос закрытой печати")
   t.eq(calls.n, 0, "закрытая печать знание не читает")
   t.ok(not has(json.encode(job.messages), "ЗНАНИЕ-МАРКЕР"), "знания нет в закрытой печати")
   env:say("кто ты", "Молчу.")
   env:page()
-  t.ok(is_locked_call(env.llm_calls[1]), "закрытый промпт без знания")
+  t.ok(is_closed_call(env.llm_calls[1]), "закрытый промпт без знания")
 end
 
 function T.test_knowledge_read_failure_still_answers()

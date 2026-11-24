@@ -1164,21 +1164,18 @@ function T.test_unseen_question_is_shown_before_it_is_answered()
   t.eq(ajob.stage, "confirm", "вопрос показан — запись читается как ответ")
 end
 
--- с печатью: закрытая страница — приглашение, вопрос идёт после ключа, вместе с приветствием
-function T.test_sealed_question_comes_with_welcome()
+-- с печатью (spec §4): вопрос о строке данных не читает — его задаёт и закрытая страница, запись при закрытой — ответ
+-- на показанный вопрос. Ключ, открывая печать, по-прежнему добавляет ждущий вопрос к приветствию
+function T.test_sealed_question_asked_while_closed()
   local env = bare(R2_LINE, nil, true)
-  local first = env.ctrl:seal_toggle()
-  t.ok(in_list(texts.neutral.en.welcome, first), "строка ещё не разобрана — только приветствие: " .. tostring(first))
-  resolve(env, R2_OBJ)
-  env.ctrl:seal_toggle() -- ключ снова закрыл печать
-  t.ok(in_list(texts.neutral.en.invitation, env.ctrl:opening_text()), "закрытая страница — приглашение, не вопрос")
-  t.eq(env.ctrl:begin(PNG).mode, "locked")
+  resolve(env, R2_OBJ) -- разбор строки идёт и при закрытой печати
+  t.ok(not env.ctrl.seal_open, "печать закрыта")
+  t.eq(env.ctrl:opening_text(), R2_ASK, "закрытая страница — вопрос о строке, не приглашение")
+  t.eq(env.ctrl:begin(PNG).stage, "confirm", "запись при закрытой — ответ на вопрос")
   local text = env.ctrl:seal_toggle()
   t.ok(has(text, R2_ASK), "приветствие и вопрос одной репликой: " .. tostring(text))
   local welcome = text:sub(1, #text - #R2_ASK - 1)
   t.ok(in_list(texts.neutral.en.welcome, welcome), "приветствие нейтральное: " .. welcome)
-  local ajob = env.ctrl:begin(PNG)
-  t.eq(ajob.stage, "confirm", "вопрос показан вместе с приветствием")
 end
 
 function T.test_resolve_prompt_and_decode()
@@ -1533,11 +1530,13 @@ function T.test_ask_repeats_after_offline()
   t.ok(in_list(texts.neutral.ru.later, env.ctrl:finish(third, nil, "gemini: timeout")), "язык вопроса — русский")
 end
 
--- с печатью: закрытая страница — нейтральное приглашение; ключ снимает печать, вопрос идёт вместе с приветствием
+-- с печатью, строки нет: закрытая страница спрашивает «Чей это дневник?», запись — ответ; ключ снимает печать, вопрос
+-- идёт вместе с приветствием
 function T.test_sealed_then_question()
   local env = bare(nil, nil, true)
-  t.ok(in_list(texts.neutral.en.invitation, env.ctrl:opening_text()), "приглашение нейтральное")
-  t.eq(env.ctrl:begin(PNG).mode, "locked", "сначала печать, потом вопрос")
+  local q = env.ctrl:opening_text()
+  t.ok(in_list(texts.neutral.en.ask, q), "закрытая страница — «Чей это дневник?»: " .. tostring(q))
+  t.eq(env.ctrl:begin(PNG).stage, "ask", "запись при закрытой — ответ на вопрос")
   local first = env.ctrl:seal_toggle()
   local joined
   for _, w in ipairs(texts.neutral.en.welcome) do
@@ -1547,6 +1546,24 @@ function T.test_sealed_then_question()
   end
   t.ok(joined, "нейтральное приветствие и вопрос одной репликой: " .. tostring(first))
   t.eq(env.ctrl:begin(PNG).stage, "ask", "теперь запись — ответ на вопрос")
+end
+
+-- закрытая печать, строки нет: вопрос, ответ и «да» принимают строку, а в запросы модели данные пользователя не идут
+function T.test_sealed_whose_answer_accepted_without_data()
+  local env = bare(nil, nil, true)
+  local sid = env.mem:session(env.now)
+  env.mem:add(sid, "owner", "МЕТКА-ДАННЫЕ", env.now)
+  t.ok(in_list(texts.neutral.en.ask, env.ctrl:opening_text()), "вопрос на экране")
+  t.eq(env.ctrl:finish(env.ctrl:begin(PNG), { result = ASK_ANS }), ASK_ANS.reply, "дневник переспрашивает о мире")
+  t.eq(env.ctrl:opening_text(), ASK_ANS.reply, "ждёт «да»")
+  env.ctrl:finish(env.ctrl:begin(PNG), { result = { read = "да", yes = true, reply = "x", lang = "ru" } })
+  t.eq(select(1, env.mem:last_asked()).line, HERMIONE_LINE, "строка принята")
+  t.ok(not in_list(texts.neutral.en.ask, env.ctrl:opening_text()), "вопроса больше нет")
+  t.ok(not env.ctrl.seal_open, "печать по-прежнему закрыта")
+  t.ok(#env.calls >= 2, "модель звалась на каждую страницу")
+  for i, c in ipairs(env.calls) do
+    t.ok(not has(json.encode(c.messages), "МЕТКА-ДАННЫЕ"), "запрос " .. i .. ": данные пользователя")
+  end
 end
 
 -- строка конфига важнее сохранённой; без неё действует сохранённая
@@ -1752,30 +1769,34 @@ function T.test_title_creates_nothing()
   t.eq(env.mem:persona_by_key(persona.key("Рон Уизли")), nil, "меню строку в базу не заводит")
 end
 
+-- закрытая печать: готовый персонаж отвечает своим голосом — язык, род, образ; данных нет (spec §4)
 function T.test_sealed_page_uses_persona_language_gender_and_kind()
   local env = make("Hermione Granger", nil, true)
   ready_full(env, "Hermione Granger", EN_OBJ)
   local job = env.ctrl:begin(PNG)
-  t.eq(job.mode, "locked")
+  t.ok(job.mode == "open" and job.closed, "запрос закрытой печати")
   local s = job.messages[1].content
-  t.ok(has(s, "английский") and has(s, "женском роде") and has(s, "Ты — записная книжка"), s)
-  t.ok(not has(s, "по-русски") and not has(s, "мужском") and not has(s, "магический дневник"), s)
+  t.ok(has(s, "Ты — diary of Hermione Granger.") and has(s, "английский") and has(s, "женском роде"), s)
+  t.ok(not has(s, "по-русски") and not has(s, "мужском") and not has(s, "Волдеморт"), s)
+  t.ok(has(s, prompt.SEAL_CLOSED), "правило закрытой печати")
 end
 
--- персонажа ещё нет (раздела persona нет; вопрос без ответа): язык записи, без рода — не «по-русски» и не «мужском»
+-- персонажа ещё нет (раздела persona нет): страница читается без образа, как при открытой печати (prompt.setup) —
+-- на языке записи и без рода, не голосом «Методов»
 function T.test_sealed_page_without_persona_uses_record_language()
-  for name, env in pairs({ pending = make("Hermione Granger", nil, true),
-      asking = bare(nil, nil, true) }) do
-    local s = env.ctrl:begin(PNG).messages[1].content
-    t.ok(has(s, "на языке записи") and has(s, "о себе без рода"), name .. ": " .. s)
-    t.ok(not has(s, "по-русски") and not has(s, "мужском"), name .. ": нет русского и мужского")
-  end
+  local env = make("Hermione Granger", nil, true)
+  local job = env.ctrl:begin(PNG)
+  t.ok(job.mode == "setup" and job.stage == "gen", tostring(job.mode) .. "/" .. tostring(job.stage))
+  local s = job.messages[1].content
+  t.ok(has(s, "на языке записи") and has(s, "без рода"), s)
+  t.ok(not has(s, "Волдеморт") and not has(s, "по-русски"), "не голос «Методов»")
 end
 
 -- «Методов» — снимок: закрытая печать через контроллер та же, что без персон
-function T.test_methods_locked_through_controller_unchanged()
+function T.test_methods_closed_through_controller_unchanged()
   local env = make(METHODS_LINE, nil, true)
-  t.eq(env.ctrl:begin(PNG).messages[1].content, prompt.locked("B64")[1].content, "закрытая печать")
+  t.eq(env.ctrl:begin(PNG).messages[1].content, prompt.open("B64", { seal = "closed" })[1].content,
+    "закрытая печать")
 end
 
 -- пересказ прошлой сессии и свёртка текущей — голосом персонажа

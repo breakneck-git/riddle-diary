@@ -231,7 +231,7 @@ function T.test_prompts_diary_speaks_masculine()
     end
     return table.concat(out, "\n")
   end
-  local all = { locked = dump(prompt.locked("B64")), open = dump(prompt.open("B64", {})),
+  local all = { closed = dump(prompt.open("B64", { seal = "closed" })), open = dump(prompt.open("B64", {})),
     open_knowledge = dump(prompt.open("B64", { knowledge = "x" })),
     open_sections = dump(prompt.open("B64", { knowledge = { { title = "x", total = 1, docs = { { text = "x" } } },
       { total = 1, docs = { { text = "x" } } } } })),
@@ -299,14 +299,14 @@ end
 function T.test_prompts_do_not_gender_writer_in_past()
   local prompt = require("riddle.prompt")
   local recent = { { role = "owner", text = "x" }, { role = "diary", text = "y" } }
-  local all = { locked = prompt.locked("B64")[1].content,
+  local all = { closed = prompt.open("B64", { seal = "closed" })[1].content,
     open = prompt.open("B64", { recent = recent, knowledge = "x", summaries = { "x" }, lore = "x",
       tasks = TASKS_BLOCK, titles = TITLES })[1].content,
-    open_sealed = prompt.open("B64", { sealed = true, recent = recent })[1].content,
+    open_closed = prompt.open("B64", { seal = "closed", recent = recent })[1].content,
     open_gen = prompt.open("B64", { persona = GEN_VIEW, recent = recent })[1].content,
     setup = prompt.setup("B64", "x")[1].content,
     modes = mode_lines(),
-    locked_gen = prompt.locked("B64", GEN_VIEW)[1].content,
+    closed_gen = prompt.open("B64", { seal = "closed", persona = GEN_VIEW })[1].content,
     summarize = prompt.summarize({ { role = "owner", text = "x" } })[1].content,
     summarize_gen = prompt.summarize({ { role = "owner", text = "x" } }, nil, GEN_VIEW)[1].content,
     roll = prompt.roll(nil, { { role = "owner", text = "x" } })[1].content,
@@ -380,14 +380,14 @@ end
 function T.test_prompts_have_no_short_forms_of_writer()
   local prompt = require("riddle.prompt")
   local recent = { { role = "owner", text = "x" }, { role = "diary", text = "y" } }
-  local all = { locked = prompt.locked("B64")[1].content,
+  local all = { closed = prompt.open("B64", { seal = "closed" })[1].content,
     open = prompt.open("B64", { recent = recent, knowledge = "x", summaries = { "x" }, lore = "x",
       tasks = TASKS_BLOCK, titles = TITLES })[1].content,
-    open_sealed = prompt.open("B64", { sealed = true, recent = recent })[1].content,
+    open_closed = prompt.open("B64", { seal = "closed", recent = recent })[1].content,
     open_gen = prompt.open("B64", { persona = GEN_VIEW, recent = recent })[1].content,
     setup = prompt.setup("B64", "x")[1].content,
     modes = mode_lines(),
-    locked_gen = prompt.locked("B64", GEN_VIEW)[1].content,
+    closed_gen = prompt.open("B64", { seal = "closed", persona = GEN_VIEW })[1].content,
     summarize = prompt.summarize({ { role = "owner", text = "x" } })[1].content,
     summarize_gen = prompt.summarize({ { role = "owner", text = "x" } }, nil, GEN_VIEW)[1].content,
     roll = prompt.roll(nil, { { role = "owner", text = "x" } })[1].content,
@@ -401,7 +401,7 @@ end
 -- правило рода называет краткие формы и не подхватывает род, которым пишущий говорит о себе сам
 function T.test_gender_rule_covers_short_forms_and_writer_own_gender()
   local prompt = require("riddle.prompt")
-  for name, s in pairs({ locked = prompt.locked("B64")[1].content, open = prompt.open("B64", {})[1].content,
+  for name, s in pairs({ closed = prompt.open("B64", { seal = "closed" })[1].content, open = prompt.open("B64", {})[1].content,
       open_gen = prompt.open("B64", { persona = GEN_VIEW })[1].content }) do
     t.ok(s:find("краткие прилагательные и причастия", 1, true), name .. ": краткие формы — тоже род")
     for _, w in ipairs({ "«готов»", "«готова»", "«уверен»", "«уверена»", "«прав»", "«права»" }) do
@@ -415,7 +415,7 @@ end
 -- примеры-вопросы превращали каждый ответ во встречный вопрос): ни «?», ни «ли» в правиле о кратких формах
 function T.test_short_form_rule_examples_are_not_questions()
   local prompt = require("riddle.prompt")
-  for name, s in pairs({ locked = prompt.locked("B64")[1].content, open = prompt.open("B64", {})[1].content }) do
+  for name, s in pairs({ closed = prompt.open("B64", { seal = "closed" })[1].content, open = prompt.open("B64", {})[1].content }) do
     local rule = s:match("Род выдают и краткие.-Даже если пишущий")
     t.ok(rule, name .. ": правило о кратких формах на месте")
     rule = rule or ""
@@ -490,15 +490,15 @@ end
 -- правила промпта говорят о пишущем без «он/его», запретные формы — только примерами в ёлочках
 function T.test_prompts_have_no_user_forms()
   local prompt = require("riddle.prompt")
-  local all = { locked = prompt.locked("B64")[1].content, open = prompt.open("B64", {})[1].content,
-    open_sealed = prompt.open("B64", { sealed = true })[1].content,
+  local all = { closed = prompt.open("B64", { seal = "closed" })[1].content, open = prompt.open("B64", {})[1].content,
+    open_closed = prompt.open("B64", { seal = "closed" })[1].content,
     open_knowledge = prompt.open("B64", { knowledge = "x" })[1].content,
     open_sections = prompt.open("B64", { knowledge = { { title = "x", total = 1, docs = { { text = "x" } } },
       { total = 1, docs = { { text = "x" } } } } })[1].content,
     open_tasks = prompt.open("B64", { tasks = TASKS_BLOCK, titles = TITLES })[1].content,
     open_history = prompt.open("B64", { recent = { { role = "owner", text = "x" } } })[1].content,
     modes = mode_lines(),
-    locked_gen = prompt.locked("B64", GEN_VIEW)[1].content,
+    closed_gen = prompt.open("B64", { seal = "closed", persona = GEN_VIEW })[1].content,
     summarize = prompt.summarize({ { role = "owner", text = "x" } })[1].content,
     summarize_gen = prompt.summarize({ { role = "owner", text = "x" } }, nil, GEN_VIEW)[1].content,
     roll = prompt.roll(nil, { { role = "owner", text = "x" } })[1].content,

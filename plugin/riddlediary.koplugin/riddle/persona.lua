@@ -20,7 +20,7 @@ persona.METHODS_VIEW = { id = persona.METHODS_ID, builtin = true, lang = "ru", g
   title = "Дневник Реддла" }
 
 -- персонажа нет (вопрос «чей дневник», раздела persona ещё нет): служебные промпты пишут на языке записи, о себе без
--- рода (prompt.locked / summarize / roll); имя меню — DEFAULT_TITLE
+-- рода (prompt.summarize / roll); имя меню — DEFAULT_TITLE
 persona.NONE_VIEW = { none = true }
 persona.DEFAULT_TITLE = "Дневник / Diary"
 

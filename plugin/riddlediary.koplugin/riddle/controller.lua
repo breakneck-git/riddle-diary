@@ -63,6 +63,9 @@ function Controller.new(deps)
   local self = {
     deps = deps,
     seal = seal.new(deps.cfg.seal),
+    -- реплики { role, text } с момента закрытия печати: связность разговора без памяти (spec §4). Живут в процессе,
+    -- сбрасывает открытие (seal_toggle)
+    closed_turns = {},
     bags = {},
     pools = {}, -- сгенерированные наборы фраз: "id:name" -> { src, list } (Controller:texts)
   }
@@ -123,6 +126,7 @@ end
 -- запись в память не должна терять ответ: ошибка логируется, текст всё равно уйдёт на экран.
 -- owner_marks, diary_marks — метки реплик (memory.add), nil — без меток. -> true, если метки пишущего легли
 function Controller:_remember(sid, read, reply, owner_marks, diary_marks)
+  if not self:_may_write() then return false end
   local saved
   local ok, err = pcall(function()
     local now = self.deps.now()
@@ -342,7 +346,7 @@ end
 -- мимо, прежнее имя остаётся. В лог — только итог, без имени и без текста ошибки (в нём может быть имя)
 function Controller:_save_owner_name(id, name)
   name = mapdata.owner(name)
-  if not (id and name) then return end
+  if not (id and name and self:_may_write()) then return end
   local memory = self.deps.memory
   local ok, saved = pcall(memory.set_owner_name, memory, id, name)
   self:_log((ok and saved) and "riddle: owner name saved" or "riddle: owner name save failed")
@@ -499,23 +503,22 @@ function Controller:_ask_answer(job, result)
   return ask
 end
 
--- первая строка на чистой странице (открытие, пробуждение): без печати — приветствие персонажа (мешок), с печатью —
--- его приглашение; приглашения нет или персонаж не готов (persona.ready), сбой чтения — нейтральное; «Методов» — texts.invitation
+-- первая строка на чистой странице (открытие, пробуждение): вопрос о строке, если он ждёт; иначе без печати —
+-- приветствие персонажа (мешок), с печатью — его приглашение; приглашения нет или персонаж не готов (persona.ready), сбой чтения — нейтральное; «Методов» — texts.invitation
 function Controller:opening_text()
   -- чистая страница — как новая: строка конфига читается заново. Иначе сбой чтения до сна держал бы её действующей
   -- до первой записи, и отвергнутая строка давала бы приветствие вместо «Чей это дневник?»
   self:_config_changed()
-  if not self.seal.configured then
-    -- строки нет вовсе: «Чей это дневник?» (задача 8); ответ уже прочитан и ждёт «да» — тот же вопрос с миром
-    if self:_asking() then return self:_ask_open() end
-    -- строка без мира в конфиге: вместо приветствия — вопрос о ней (задача 7); следующая запись — ответ на него
-    local ask = self:_pending_ask()
-    if ask then
-      self.asked = ask
-      return ask
-    end
-    return self:pick(self:texts("greetings"))
+  -- вопрос о строке — и при закрытой печати: страница отвечает на вопрос, который был на экране (spec §4)
+  -- строки нет вовсе: «Чей это дневник?» (задача 8); ответ уже прочитан и ждёт «да» — тот же вопрос с миром
+  if self:_asking() then return self:_ask_open() end
+  -- строка без мира в конфиге: вместо приветствия — вопрос о ней (задача 7); следующая запись — ответ на него
+  local ask = self:_pending_ask()
+  if ask then
+    self.asked = ask
+    return ask
   end
+  if not self.seal.configured then return self:pick(self:texts("greetings")) end
   if self:_builtin() then return texts.invitation end
   local ok, view, row, parts = pcall(self._current, self)
   -- своё приглашение — когда персонаж готов целиком (persona и world), раньше — нейтральное
@@ -534,10 +537,11 @@ function Controller:forget_persona()
   return true
 end
 
--- недостающий раздел, который пора генерировать -> section | nil: печать открыта, нет паузы после сбоя (gen_hold — до
--- следующей страницы; map_hold — у разделов карты, до следующего открытия дневника или сна). Сбой чтения — nil
+-- недостающий раздел, который пора генерировать -> section | nil: нет паузы после сбоя (gen_hold — до следующей
+-- страницы; map_hold — у разделов карты, до следующего открытия дневника или сна). Печать не мешает: генерация берёт
+-- только строку персоны (prompt.gen_*), данных пользователя не читает (spec §4). Сбой чтения — nil
 function Controller:_gen_due_section()
-  if self.gen_hold or not self.seal.open then return nil end
+  if self.gen_hold then return nil end
   local ok, sec = pcall(self._gen_next, self)
   if not ok then
     self:_log("riddle: gen check failed: " .. tostring(sec))
@@ -560,8 +564,30 @@ function Controller:_gen_tail_due()
   return sec ~= nil and not persona.is_map(sec.name)
 end
 
+-- данные пользователя (память, лор, знания, задачи) доступны: печать открыта или её нет. Одно условие на все пути,
+-- что их читают или отправляют модели (spec §4)
+function Controller:_data_ok()
+  return self.seal.open
+end
+
+-- сказанное на странице ложится в память дневника: база открыта, и печать открыта или правило remember (ответ
+-- владельца 20.11: разговор при закрытой печати по умолчанию запоминается)
+function Controller:_may_write()
+  return self.deps.memory ~= nil and (self:_data_ok() or self.seal.rules.remember == true)
+end
+
+-- реплика при закрытой печати — в связность разговора; хранится не больше окна истории промпта
+local function add_closed_turn(turns, read, reply)
+  turns[#turns + 1] = { role = "owner", text = read }
+  turns[#turns + 1] = { role = "diary", text = reply }
+  while #turns > prompt.MAX_RECENT do table.remove(turns, 1) end
+end
+
+-- данные для ответа -> ctx для prompt.open, контекст задач | nil. Единственная точка отсечения: при закрытой печати
+-- ни память, ни лор, ни знания, ни задачи не читаются — только реплики с момента закрытия.
 -- parts — разделы текущей персоны (nil у «Методов»): мир уходит в лор после lore.md
 function Controller:_open_context(sid, parts)
+  if not self:_data_ok() then return { seal = "closed", recent = self.closed_turns }, nil end
   local memory = self.deps.memory
   local summaries = {}
   for _, s in ipairs(memory:summaries(SUMMARIES_N)) do
@@ -580,7 +606,6 @@ function Controller:_open_context(sid, parts)
     knowledge = knowledge,
     tasks = tasks_ctx and tasks_ctx.block,
     titles = tasks_ctx and tasks_ctx.titles,
-    sealed = self.seal.configured, -- печати нет — промпт о ней молчит
   }, tasks_ctx
 end
 
@@ -790,14 +815,13 @@ function Controller:_begin(png_path, with_run)
   -- персона: страница снимает паузу генерации; хранилища нет — фраза сбоя (не Волдеморт: строка просит другого
   -- персонажа). Голосом персонажа — когда есть и персона, и мир (persona.ready); раньше страница читается без образа
   -- (prompt.setup, setup = true) и ложится в память нового персонажа
-  local view, parts, setup, ask, row, asking
-  if self.seal.open then
-    self.gen_hold = nil
-    -- строки нет: страница — ответ на «Чей это дневник?» (читается без образа и без памяти, _ask_answer)
-    if self.saved_ask and self.saved_ask.failed then self.saved_ask = nil end -- сбой чтения — перечитать
-    asking = self:_asking()
-  end
-  if self.seal.open and not asking then
+  -- Закрытая печать — тот же путь (spec §4): персона, вопрос о строке и генерация данных пользователя не читают
+  local view, parts, setup, ask, row
+  self.gen_hold = nil
+  -- строки нет: страница — ответ на «Чей это дневник?» (читается без образа и без памяти, _ask_answer)
+  if self.saved_ask and self.saved_ask.failed then self.saved_ask = nil end -- сбой чтения — перечитать
+  local asking = self:_asking()
+  if not asking then
     ok, view, row, parts = pcall(self._current, self)
     if not ok then
       self:_log("riddle: on_page failed: " .. tostring(view))
@@ -833,35 +857,37 @@ function Controller:_begin(png_path, with_run)
       -- запись во время генерации: из ответа берётся только read (_answer)
       return { mode = "setup", stage = "gen", sid = deps.memory:session(deps.now()), messages = prompt.setup(png_b64) }
     end
-    if self.seal.open then
-      if not self.seal.configured and self.followup_due then pcall(self._sync_lore, self) end -- лор — к ответам до начала хвоста старта
-      local sid = deps.memory:session(deps.now())
-      local t0 = deps.clock and deps.clock()
-      local ctx, tasks_ctx = self:_open_context(sid, parts)
-      ctx.persona = view
-      local rhythm_job = self:_rhythm(sid, tasks_ctx)
-      ctx.mode_line = rhythm_job and rhythm_job.line
-      ctx.mode_labels = rhythm_job and rhythm_job.line and rhythm_job.labels
-      -- правило picks — только если есть чем сверять (cfg.watched_values): иначе оно зря ест лимит запроса
-      local watched, untouched = watched_titles(ctx.knowledge, deps.cfg.watched_values)
-      ctx.picks = watched ~= nil
-      -- открывашка карты: у «Методов» — всегда (мир Поттера), у сгенерированной — когда есть раздел map
-      local map = mapdata.of(view, row, parts)
-      ctx.map = map.open and map or nil
-      local messages = prompt.open(png_b64, ctx)
-      if t0 then -- сборка идёт в родителе: сколько она стоит на фоне ответа (в лог — только числа)
-        self:_log(string.format("riddle: prompt built in %d ms chars=%d",
-          math.floor((deps.clock() - t0) * 1000 + 0.5), prompt.chars(messages)))
-      end
-      -- job.tasks и job.rhythm остаются в родителе (в дочерний уходят только messages): метки — в _answer.
-      -- job.watched — сверка советов в _answer, job.retry — повтор (в дочернем: замыкание создано до fork)
-      -- job.map: запрос спрашивал о карте — только тогда "map":"open" в ответе действие (_answer).
-      -- job.persona_id — чья запись: имя из ответа ложится этой персоне, даже если строка сменилась до ответа
-      return { mode = "open", sid = sid, messages = messages, tasks = tasks_ctx, rhythm = rhythm_job,
-        watched = watched, retry = picks_retry(messages, watched, untouched), map = ctx.map ~= nil,
-        persona_id = row and row.id }
+    -- закрытая печать — тот же ответ без данных: их не отдаёт _open_context (spec §4)
+    local data = self:_data_ok()
+    if data and self.followup_due then pcall(self._sync_lore, self) end -- лор — к ответам до начала хвоста
+    -- база не открылась (main.lua): закрытая печать отвечает и без неё, сессии нет; открытой нужна память
+    local sid = deps.memory and deps.memory:session(deps.now())
+    local t0 = deps.clock and deps.clock()
+    local ctx, tasks_ctx = self:_open_context(sid, parts)
+    ctx.persona = view
+    local rhythm_job = self:_rhythm(sid, tasks_ctx)
+    ctx.mode_line = rhythm_job and rhythm_job.line
+    ctx.mode_labels = rhythm_job and rhythm_job.line and rhythm_job.labels
+    -- правило picks — только если есть чем сверять (cfg.watched_values): иначе оно зря ест лимит запроса
+    local watched, untouched = watched_titles(ctx.knowledge, deps.cfg.watched_values)
+    ctx.picks = watched ~= nil
+    -- открывашка карты: у «Методов» — всегда (мир Поттера), у сгенерированной — когда есть раздел map. Карта, как
+    -- и роза (riddle_diarywidget onPageDone), открывается только при открытой печати
+    local map = data and mapdata.of(view, row, parts)
+    ctx.map = map and map.open and map or nil
+    local messages = prompt.open(png_b64, ctx)
+    if t0 then -- сборка идёт в родителе: сколько она стоит на фоне ответа (в лог — только числа)
+      self:_log(string.format("riddle: prompt built in %d ms chars=%d",
+        math.floor((deps.clock() - t0) * 1000 + 0.5), prompt.chars(messages)))
     end
-    return { mode = "locked", messages = prompt.locked(png_b64, self:_self_view()) }
+    -- job.tasks и job.rhythm остаются в родителе (в дочерний уходят только messages): метки — в _answer.
+    -- job.watched — сверка советов в _answer, job.retry — повтор (в дочернем: замыкание создано до fork)
+    -- job.map: запрос спрашивал о карте — только тогда "map":"open" в ответе действие (_answer).
+    -- job.persona_id — чья запись: имя из ответа ложится этой персоне, даже если строка сменилась до ответа.
+    -- job.closed — запрос собран без данных: реплика идёт в связность закрытой печати (_answer)
+    return { mode = "open", sid = sid, messages = messages, tasks = tasks_ctx, rhythm = rhythm_job,
+      watched = watched, retry = picks_retry(messages, watched, untouched), map = ctx.map ~= nil,
+      persona_id = row and row.id, closed = not data or nil }
   end)
   if ok and with_run then
     ok, job.run = pcall(deps.remote_fn, job.messages, true, job.retry and { retry = job.retry } or nil)
@@ -990,6 +1016,8 @@ function Controller:_answer(job, result, err)
     -- метка не легла (миграция 3 сорвалась, сбой записи) — флаг; ритм её не увидит
     if kind then self:_log("riddle: entry task=" .. kind .. (saved and "" or " saved=no")) end
     self:_save_owner_name(job.persona_id, result.name)
+    -- связность закрытой печати; печать успела открыться — список уже сброшен, реплика ему не принадлежит
+    if job.closed and not self:_data_ok() then add_closed_turn(self.closed_turns, read, reply) end
     job.answered = true -- реплики записаны: finish проверит, не назрела ли свёртка
     return reply
   end
@@ -1006,15 +1034,6 @@ function Controller:_answer(job, result, err)
     job.answered = true -- реплики записаны: finish проверит, не назрела ли свёртка
     return reply
   end
-
-  -- закрытая печать: ответ модели по закрытому промпту (задача 3 заменит его общим). Что написано на странице,
-  -- в лог Kindle не идёт: текст read — только в devmode, иначе длина
-  local read = tostring(result.read)
-  local shown = deps.devmode and string.format('"%s"', (read:gsub("\n", "\\n")))
-    or string.format("%d chars", str.utf8_len(read))
-  self:_log(string.format("riddle: locked read %s via %s", shown, tostring(result.via or "?")))
-  if Controller.usable(result) then return result.reply end
-  return self:_pick(self:texts("unreadable"))
 end
 
 -- ключ узнан (задача 6): закрытую печать открывает приветствием, открытую закрывает фразой texts.seal_closed.
@@ -1029,6 +1048,10 @@ function Controller:seal_toggle()
   end
   if not s:unlock(self.deps.now()) then return nil end
   self:_log("riddle: seal opened by key")
+  -- данные снова доступны: разговор идёт из памяти, хвост (лор, пересказ ждущей сессии) положен, как на старте
+  -- без печати
+  self.closed_turns = {}
+  self.followup_due = true
   local welcome = self:_pick(self:texts("welcomes"))
   -- строка ждёт ответа: вопрос идёт вместе с приветствием (закрытая страница показывала приглашение)
   local ask = self:_pending_ask()
@@ -1066,7 +1089,7 @@ function Controller:finish(job, payload, err)
     if payload == nil then return nil, err end
     return self.deps.absorb(payload)
   end)
-  if job.answered and self:_roll_total(job.sid) then self.roll_due = true end
+  if job.answered and job.sid and self:_roll_total(job.sid) then self.roll_due = true end
   return text, action
 end
 
@@ -1196,6 +1219,8 @@ function Controller:_summary_job(with_roll, with_gen, gen_only)
     return gen
   end
   if gen_only then return nil end
+  -- пересказ и свёртка отправляют память модели: при закрытой печати они ждут открытия, их поводы не гаснут
+  if not self:_data_ok() then return gen end
   -- хвост дошёл до пересказа и свёртки: их поводы погашены здесь, и только здесь. Хвост, не начавшийся (закрытие,
   -- сон) или ушедший на генерацию, поводов не тратит — их возьмёт хвост следующего ответа. Повод пересказа едет в
   -- задании (followup_due): отменённый хвост возвращает его в finish_followup. Повод свёртки не едет — его заново
@@ -1262,6 +1287,7 @@ function Controller:_save_summary(job, result)
 end
 
 function Controller:_followup_lore()
+  if not self:_data_ok() then return end -- лор — данные пользователя: ждёт открытия
   local ok, err = pcall(self._sync_lore, self)
   if not ok then self:_log("riddle: lore sync failed: " .. tostring(err)) end
 end
@@ -1349,10 +1375,12 @@ function Controller:finish_followup(job, payload, err)
   end
   -- карта уступила этому заданию: следующий хвост цепочки — ей, каков бы ни был итог (кроме отмены). Иначе
   -- пересказ, который не сохраняется (сбой, пустой ответ), строился бы цепочкой снова и снова. Флаг — только если
-  -- следующий хвост и правда карта: печать закрыта (сон посреди хвоста) или пауза карты (map_hold) — следовать некому,
-  -- и лежащий до сна флаг отдал бы карте хвост раньше пересказа на разблокировке
+  -- следующий хвост и правда карта и данные доступны: печать закрыта (сон посреди хвоста) — пересказ ждёт открытия,
+  -- и лежащий флаг отдал бы карте хвост раньше пересказа на разблокировке; пауза карты (map_hold) — следовать некому
   local due = self:_gen_due_section()
-  if job.before_map and (ok or e ~= "cancelled") and due and persona.is_map(due.name) then self.map_next = true end
+  if job.before_map and self:_data_ok() and (ok or e ~= "cancelled") and due and persona.is_map(due.name) then
+    self.map_next = true
+  end
   return due ~= nil
 end
 
@@ -1374,8 +1402,9 @@ function Controller:take_followup(gen_only)
     if due and self.tail ~= "full" then self.tail = "gen" end
     return due
   end
-  local followup = not self.seal.configured and self.followup_due == true
-  local roll = self.roll_due == true
+  local data = self:_data_ok()
+  local followup = data and self.followup_due == true
+  local roll = data and self.roll_due == true
   local gen = self:_gen_tail_due()
   self.roll_tail = roll and not followup and not gen
   local taken = followup or roll or gen
@@ -1398,11 +1427,9 @@ function Controller:on_sleep()
   self.map_hold, self.map_next = nil, nil -- после сна — новая попытка данных карты, пересказ раньше неё
   self.roll_tail = false -- хвост свёртки, не начатый до сна, — не повод для паузы у хвоста после него
   self.tail = false -- и хвост, не начатый до сна: после него хвост берётся заново
-  if not self.seal.configured then
-    self.followup_due = true -- закрывать нечего: открыта всегда
-    return
-  end
   if self.seal:closes_on_sleep() then self.seal:lock("sleep") end
+  -- после сна хвост берётся заново, если данные доступны (печати нет или сон её не закрыл); закрытая — откроет ключ
+  if self:_data_ok() then self.followup_due = true end
 end
 
 return Controller

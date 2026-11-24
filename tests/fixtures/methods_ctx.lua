@@ -4,14 +4,13 @@ local tasks = require("riddle.tasks")
 
 local M = {}
 
-function M.open_ctx(sealed)
+function M.open_ctx()
   local list = {}
   for i = 1, 3 do
     list[i] = { id = "id" .. i, title = "ДЕЛО-" .. i, due = i == 1 and "2026-10-30" or nil,
       project = i == 2 and "ПРОЕКТ" or nil }
   end
   return {
-    sealed = sealed,
     lore = "## Раздел\nЛОР-МАРКЕР",
     knowledge = "ЗНАНИЕ-МАРКЕР",
     tasks = tasks.block(list),
