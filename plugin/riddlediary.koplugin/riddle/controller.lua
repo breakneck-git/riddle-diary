@@ -395,8 +395,10 @@ end
 -- данные карты мародёров текущей персоны (riddle.mapdata) — та же персона, что отвечает на страницы (_current);
 -- сбой чтения — запасные (карта открывается всё равно: пергамент и надпись blind). Не только чтение: _current у
 -- персоны из конфига без строки personas заводит её (как первая страница) — карта, открытая раньше первой страницы,
--- оставляет в базе строку персонажа
+-- оставляет в базе строку персонажа. Персона и имя владельца — данные дневника: при закрытой печати (_data_ok) — только
+-- запасные, без имени (виджет такую карту и не открывает: Diary:openMap)
 function Controller:map()
+  if not self:_data_ok() then return mapdata.of(nil, nil, nil) end
   local ok, view, row, parts = pcall(self._current, self)
   if not ok then
     self:_log("riddle: map data failed: " .. tostring(view))

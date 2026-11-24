@@ -1702,8 +1702,9 @@ function T.test_rose_after_idle_no_map()
   t.eq(count("riddle: map open"), 0)
 end
 
--- ревью Task 7 (M12): карта открыта дольше срока простоя (её resetPage снял таймер) — после возврата на страницу
--- печать закрыта
+-- ревью Task 7 (M12, M8): настенные часы прыгнули вперёд, пока открыта карта (таймер простоя, если взведён, идёт по
+-- монотонным часам и ещё далёк) — после возврата на страницу печать закрыта сразу: backToDiary взводит таймер
+-- заново от срока контроллера (armSeal). Без этого взвода тест падает
 function T.test_map_longer_than_idle_closes_on_back()
   local d = map_diary()
   local jump = 0
@@ -1716,6 +1717,27 @@ function T.test_map_longer_than_idle_closes_on_back()
   d:closeMap("rose")
   run(1)
   t.eq(d.controller.seal.open, false, "после возврата на страницу печать закрыта")
+end
+
+-- ревью seal-key: роза нарисована при открытой печати, карта ждёт очереди за ответом на экране; простой закрывает
+-- печать (таймер -> wipeSealed -> nextAnswer) — карта при закрытой печати не открывается
+function T.test_idle_close_while_map_queued()
+  local d = map_diary()
+  d.controller = ctl(stand.rules({ key = true, minutes = 1 }),
+    { now = function() return 1000 + math.floor(clock) end })
+  d.controller:seal_toggle()
+  d.queue[#d.queue + 1] = { text = "Я помню", top = 100, page = { strokes = {} } }
+  d:nextAnswer()
+  run(59)
+  t.ok(d.answer, "ответ на экране")
+  t.ok(d.controller.seal_open, "до срока печать открыта")
+  page_done(d, strokes_of("rose_ccw"))
+  t.eq(d.queue[1] and d.queue[1].kind, "map", "карта ждёт очереди за ответом")
+  run(60)
+  t.ok(not d.controller.seal_open, "простой закрыл печать")
+  t.eq(d.map, nil, "карта при закрытой печати не открылась")
+  t.eq(count("riddle: map open"), 0)
+  t.eq(#d.queue, 0, "очередь не стоит")
 end
 
 function T.test_rose_during_ponder_waits_answer()

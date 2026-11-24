@@ -757,6 +757,16 @@ function T.test_closed_seal_keeps_owner_name()
   t.eq(names[1].name, "Гарри")
 end
 
+-- данные карты (имя владельца, персона) — данные дневника: при закрытой печати Controller:map их не отдаёт —
+-- запасные без имени; при открытой — как всегда
+function T.test_closed_seal_map_has_no_data()
+  local env = data_env()
+  env.ctrl.owner_name = function() return "Гарри" end
+  t.eq(env.ctrl:map().owner, nil, "при закрытой имени на карте нет")
+  env:unlock()
+  t.eq(env.ctrl:map().owner, "Гарри", "при открытой — есть")
+end
+
 -- связность закрытой печати хранится в окне истории промпта (prompt.MAX_RECENT реплик): старые уходят, новые остаются
 function T.test_closed_turns_window_is_bounded()
   t.eq(prompt.MAX_RECENT, 40, "окно истории промпта")

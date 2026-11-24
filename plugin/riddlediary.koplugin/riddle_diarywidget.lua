@@ -1983,9 +1983,16 @@ function Diary:cancelMap()
 end
 
 -- the diary's page goes (like a sleep wipes it), the parchment comes with a full refresh. A followup already
--- planned keeps waiting (scheduleFollowup) until the map is closed
+-- planned keeps waiting (scheduleFollowup) until the map is closed. The map is the open seal's (plan of the map): a
+-- rose drawn under it may wait its turn in the queue while the seal closes (the idle timer, wipeSealed -> nextAnswer) --
+-- then it does not open, and the queue goes on
 function Diary:openMap(why)
     local ctl = self.controller
+    if ctl and not ctl.seal_open then
+        logger.info("riddle: map dropped, seal closed (" .. tostring(why) .. ")")
+        self:nextAnswer()
+        return
+    end
     local followup = self.followup_task ~= nil
     self:resetPage()
     -- the heroes rotate between opens (riddle.cast.place's seed); counted from the wall clock, so a restarted KOReader
