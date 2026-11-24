@@ -1093,6 +1093,42 @@ function T.test_timer_closes_and_drops_in_flight()
   for _, l in ipairs(env.logs) do t.ok(not has(l, "СЕКРЕТ"), "текста ответа в логе нет: " .. l) end
 end
 
+-- повторное ревью Task 7: синхронный путь (runner не поднялся, main.lua) — срок вышел, пока шёл llm_call: ответ
+-- открытой печати не показывается, запись ложится в память по решению начала страницы
+function T.test_sync_answer_past_deadline_dropped()
+  local env = make({ seal = { key = true, minutes = 30 } })
+  env:unlock()
+  env.now_value = 1000 + 1795
+  local call = env.ctrl.deps.llm_call
+  env.ctrl.deps.llm_call = function(...)
+    env.now_value = 1000 + 1802 -- запрос идёт семь секунд
+    return call(...)
+  end
+  env:say("мои дела", "СЕКРЕТ")
+  local adds = #env.memory.adds
+  t.eq(env:page(), nil, "ответ после срока не показывается")
+  t.eq(#env.memory.adds, adds + 2, "запись и ответ легли в память")
+  t.ok(not env.ctrl.seal_open)
+  t.ok(logged(env, "riddle: answer dropped, seal changed"), table.concat(env.logs, "\n"))
+end
+
+-- срок вышел посреди разбора ответа (секунда пересечена после первой проверки в finish): ответ не показывается
+function T.test_finish_close_inside_parse_dropped()
+  local env = make({ seal = { key = true, minutes = 30 } })
+  env:unlock()
+  env.now_value = 1000 + 1795
+  env:say("мои дела", "СЕКРЕТ")
+  local job = env.ctrl:begin(PNG)
+  local absorb = env.ctrl.deps.absorb
+  env.ctrl.deps.absorb = function(payload)
+    env.now_value = 1000 + 1800 -- разбор пересёк срок
+    return absorb(payload)
+  end
+  env.now_value = 1000 + 1799
+  t.eq(env.ctrl:finish(job, job.run()), nil, "ответ после срока не показывается")
+  t.ok(not env.ctrl.seal_open)
+end
+
 -- ревью Task 7: печать, простоявшая срок, закрыта для любого читателя — аксессор seal_open (роза, карта виджета)
 -- видит её закрытой без страницы и без таймера
 function T.test_seal_open_sees_idle()

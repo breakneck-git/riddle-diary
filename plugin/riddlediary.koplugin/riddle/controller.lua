@@ -990,6 +990,7 @@ function Controller:_begin(png_path, with_run)
     self:_log("riddle: on_page failed: " .. tostring(job))
     return nil, self:_pick(self:texts("fail_other"))
   end
+  job.epoch = self.seal_epoch -- эпоха печати на начало страницы: разбор ответа (_settle) сверяет её
   return job
 end
 
@@ -1200,30 +1201,32 @@ end
 
 -- асинхронный путь (виджет + riddle.worker): begin в родителе, job.run() в дочернем,
 -- finish в родителе с его payload (через deps.absorb) или ошибкой runner'а ("timeout", "crashed", …)
--- job.epoch — эпоха печати на начало страницы (finish сверяет)
 function Controller:begin(png_path)
-  local job, text = self:_begin(png_path, true)
-  if job then job.epoch = self.seal_epoch end
-  return job, text
+  return self:_begin(png_path, true)
 end
 
 -- Свёртка назрела — хвост после этого ответа (take_followup). Только здесь: свёртка идёт лишь через runner, и в
 -- синхронном пути (on_page) повода для хвоста нет; страница разблокировки реплик не пишет
 -- -> текст | nil, действие ("map": страница открыла карту, или страница на карте её закрыла)
--- Печать сдвинулась, пока ответ был в пути (ключ, сон, простой; Review Focus 1): ответ разговора (mode "open") собран
--- при другой печати — не показывается (nil, действие тоже). Разбор идёт как всегда: запись ложится в память по
--- решению начала страницы (job.write) — чернила растворились, память — единственная копия. Сдвиг считается до
--- разбора: печать, сдвинутая в пути, а не самим ответом
 function Controller:finish(job, payload, err)
-  -- простой, истёкший в пути, — до сверки эпохи: иначе его закрыл бы разбор ответа (_data_ok), уже после сверки
-  self:seal_check()
-  local stale = job.mode == "open" and job.epoch ~= nil and job.epoch ~= self.seal_epoch
-  local text, action = self:_safe_answer(job, function()
+  local text, action = self:_settle(job, function()
     if payload == nil then return nil, err end
     return self.deps.absorb(payload)
   end)
   if job.answered and job.sid and self:_roll_total(job.sid) then self.roll_due = true end
-  if stale then
+  return text, action
+end
+
+-- разбор ответа на страницу — одна точка для асинхронного (finish) и синхронного (on_page) путей. job.epoch — эпоха
+-- печати на начало страницы. Печать сдвинулась, пока ответ был в пути (ключ, сон, простой; Review Focus 1): ответ
+-- разговора (mode "open") собран при другой печати — не показывается (nil, действие тоже). Разбор идёт как всегда:
+-- запись ложится в память по решению начала страницы (job.write) — чернила растворились, память — единственная копия.
+-- Простой проверяется до разбора, эпоха сверяется после: разбор сам читает печать (_data_ok) и, пересёкши секунду
+-- срока, закрывает её
+function Controller:_settle(job, get)
+  self:seal_check()
+  local text, action = self:_safe_answer(job, get)
+  if job.mode == "open" and job.epoch ~= nil and job.epoch ~= self.seal_epoch then
     self:_log("riddle: answer dropped, seal changed")
     return nil
   end
@@ -1270,12 +1273,13 @@ function Controller:probe_finish(payload, err)
   return true
 end
 
--- синхронный путь (devtest, виджет без runner): begin -> llm_call -> тот же разбор ответа (текст | nil, действие);
--- случайное касание -> nil
+-- синхронный путь (devtest, виджет без runner — runner не поднялся, main.lua): begin -> llm_call -> тот же разбор
+-- ответа (_settle; текст | nil, действие); случайное касание -> nil. Срок печати, вышедший за время llm_call, — та же
+-- сверка эпохи, что у finish
 function Controller:on_page(png_path)
   local job, text = self:_begin(png_path, false)
   if not job then return text end
-  return self:_safe_answer(job, function()
+  return self:_settle(job, function()
     return self.deps.llm_call(job.messages, true, job.retry and { retry = job.retry } or nil)
   end)
 end
