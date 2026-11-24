@@ -724,6 +724,36 @@ function T.test_unlock_resets()
   t.eq(ask_data(env, 1300), ASK_REPLY, "после ключа счёт заново")
 end
 
+-- фраза texts.key_needed — только на экран: в память (remember) и в связность закрытой печати ложится ответ модели
+-- без фразы. Порядок в _settle: _remember и closed_turns до _data_ask
+function T.test_key_hint_only_on_screen()
+  local env = data_env()
+  for i = 0, 3 do ask_data(env, 1000 + i * 60) end
+  env.memory.adds = {}
+  t.eq(ask_data(env, 1240), hinted(), "на экране — с фразой")
+  t.eq(#env.memory.adds, 2, "реплики — в память (remember)")
+  t.eq(env.memory.adds[2].role, "diary")
+  t.eq(env.memory.adds[2].text, ASK_REPLY, "в памяти — ответ модели без фразы")
+  local turns = env.ctrl.closed_turns
+  t.eq(turns[#turns].text, ASK_REPLY, "в связности — ответ модели без фразы")
+end
+
+-- просьба, собранная до сдвига печати (job.epoch ≠ seal_epoch: ключ открыл и снова закрыл, пока ответ был в пути),
+-- не считается: в окне просьб её нет, и четыре новые просьбы фразы не дают
+function T.test_ask_from_old_epoch_not_counted()
+  local env = data_env()
+  for i = 0, 3 do ask_data(env, 1000 + i * 60) end
+  env.now_value = 1240
+  env.script[#env.script + 1] = { read = "что я писал вчера", reply = ASK_REPLY, needs_data = true }
+  local job = env.ctrl:begin(PNG)
+  env:unlock()
+  env.ctrl:seal_toggle()
+  t.ok(not env.ctrl.seal_open, "печать снова закрыта")
+  t.eq(env.ctrl:finish(job, job.run()), nil, "ответ сдвинутой печати не показан")
+  t.eq(#env.ctrl.data_asks, 0, "просьба старой эпохи не в окне")
+  for i = 1, 4 do t.eq(ask_data(env, 1240 + i * 60), ASK_REPLY, "новая просьба " .. i) end
+end
+
 -- needs_data считается только у ответов закрытой печати: при открытой правила нет, поле — мусор модели
 function T.test_open_seal_ignores_needs_data()
   local env = data_env()

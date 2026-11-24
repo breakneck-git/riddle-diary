@@ -1740,6 +1740,27 @@ function T.test_idle_close_while_map_queued()
   t.eq(#d.queue, 0, "очередь не стоит")
 end
 
+-- то же, но за картой в очереди стоит ответ: карта при закрытой печати снимается, и очередь идёт дальше — ответ
+-- показан (Diary:openMap зовёт nextAnswer в ветке закрытой печати; без этого вызова ответ застрял бы в очереди)
+function T.test_idle_close_drops_map_and_shows_next()
+  local d = map_diary()
+  d.controller = ctl(stand.rules({ key = true, minutes = 1 }),
+    { now = function() return 1000 + math.floor(clock) end })
+  d.controller:seal_toggle()
+  d.queue[#d.queue + 1] = { text = "Я помню", top = 100, page = { strokes = {} } }
+  d:nextAnswer()
+  run(59)
+  page_done(d, strokes_of("rose_ccw"))
+  t.eq(d.queue[1] and d.queue[1].kind, "map", "карта ждёт очереди за ответом")
+  d.queue[#d.queue + 1] = { text = "За картой", top = 100, page = { strokes = {} } }
+  run(60)
+  t.ok(not d.controller.seal_open, "простой закрыл печать")
+  t.eq(d.map, nil, "карта при закрытой печати не открылась")
+  t.eq(count("riddle: map dropped, seal closed"), 1)
+  t.eq(d.revealed[#d.revealed], "За картой", "ответ за картой показан")
+  t.eq(#d.queue, 0, "очередь не стоит")
+end
+
 function T.test_rose_during_ponder_waits_answer()
   local d = map_diary()
   local idles = 0
