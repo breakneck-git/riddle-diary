@@ -5,7 +5,8 @@
 # Правила печати (таблица seal) — из файла печати RIDDLE_SEAL (по умолчанию ~/.config/riddle-diary/seal.lua):
 # поля таблицы Lua как в config.example.lua; в конфиг уходит только seal, разобранный config.parse_seal плагина.
 # Печать необязательна: нет файла или в нём нет seal — конфиг без печати («печать: нет»), дневник на устройстве
-# открыт сразу. Файл есть, но битый (не Lua, seal нарушает правила) — отказ, ничего не записывается.
+# открыт сразу. Файл есть, но битый (не Lua, seal нарушает правила, старое слово password_variants) — отказ,
+# ничего не записывается.
 # Цепочка модели: gemini-proxy → Gemini → Groq → BeatAPI (deepseek-v4.1-flash-free, max_tokens 400); OpenRouter убран (2026-10-25).
 # GROQ_API_KEY, BEATAPI_API_KEY — запасные провайдеры: providers = { { name = "groq", …, after_legacy = true }, { name = "beatapi", … } }.
 # NOTION_DIARY_API — токен Notion в notion_token (знание дневника; один, без ключа модели конфиг не пишется).
@@ -163,7 +164,8 @@ echo "watched_values: Просмотрено, Прочитано, Брошено
 # Нет файла печати — печати нет. Файл есть: до отправки проверяем (luajit читает stdin, его ошибки
 # с текстом файла не печатаются) правилами плагина — config.parse_seal, не копией: таблица Lua; seal нет —
 # печати нет; seal битый — отказ (на устройстве печать была бы закрыта без выхода). В конфиг уходит seal,
-# собранный заново из разобранных полей: прочее содержимое файла (старое слово) на устройство не попадает
+# собранный заново config.seal_lua (поля — config.SEAL_FIELDS, своего списка здесь нет). Старое слово
+# (password_variants) без seal — отказ: иначе после деплоя печать молча пропала бы
 seal_body=""
 # есть, но не читается — отказ: иначе печать молча пропала бы («печать: нет»)
 if [ -e "$SEAL" ] && [ ! -r "$SEAL" ]; then
@@ -181,21 +183,18 @@ local f = loadstring(io.read("*a"))
 local ok, t = pcall(f or error)
 if not (ok and type(t) == "table") then os.exit(1) end
 if t.seal == nil then os.exit(t.password_variants ~= nil and 5 or 2) end
+local line = config.seal_lua(t.seal)
+if not line then os.exit(1) end
+io.write("  ", line, "\n")
 local s = config.parse_seal(t.seal)
-if s.invalid then os.exit(1) end
-local parts = {}
-for _, k in ipairs({ "key", "minutes", "on_sleep", "remember", "off" }) do
-  if t.seal[k] ~= nil then parts[#parts + 1] = k .. " = " .. tostring(s[k]) end
-end
-io.write("  seal = { ", table.concat(parts, ", "), " },\n")
 os.exit(s.off and 3 or (s.on and 0 or 4))' 2>/dev/null) || rc=$?
   case $rc in
     0) seal_state="есть" ;;
     3) seal_state="снята (off)" ;;
     4) ;;
     2) seal_body="" ;;
-    5) seal_body=""
-       echo "в файле печати старое слово (password_variants) — не читается, нужна таблица seal (config.example.lua)" >&2 ;;
+    5) echo "файл печати $SEAL: старое слово (password_variants) больше не читается — перенесите печать в таблицу seal (config.example.lua); ничего не записано" >&2
+       exit 1 ;;
     *) echo "файл печати $SEAL битый — ничего не записано" >&2; exit 1 ;;
   esac
 fi

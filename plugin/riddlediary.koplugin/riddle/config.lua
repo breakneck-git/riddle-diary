@@ -61,13 +61,29 @@ local function clean_providers(list)
   return out
 end
 
-local SEAL_FLAGS = { "key", "on_sleep", "remember", "off" }
+-- поля таблицы seal — одно место: разбор (parse_seal) и сборка строки для устройства (seal_lua, tools/push_config.sh)
+-- читают только этот список. kind: boolean — true/false; count — целое ≥ 1
+config.SEAL_FIELDS = {
+  { name = "key", kind = "boolean" },
+  { name = "minutes", kind = "count" },
+  { name = "on_sleep", kind = "boolean" },
+  { name = "remember", kind = "boolean" },
+  { name = "off", kind = "boolean" },
+}
+
+local SEAL_KIND = {}
+for _, f in ipairs(config.SEAL_FIELDS) do SEAL_KIND[f.name] = f.kind end
+
+local function valid_value(kind, v)
+  if kind == "boolean" then return type(v) == "boolean" end
+  return type(v) == "number" and v >= 1 and v < math.huge and v == math.floor(v)
+end
 
 -- правила печати из raw.seal (spec §3). Всегда таблица:
 -- { on, key, minutes, on_sleep, remember, off, invalid }. on — печать есть: хоть одно правило и нет off.
--- invalid — причина, по которой правила битые: печать тогда есть и закрыта (опечатка дневник не открывает);
--- off побеждает всё, в том числе битые правила — это выход из битого конфига. Одно правило для устройства
--- и для tools/push_config.sh: скрипт зовёт эту функцию, а не копию
+-- invalid — причина, по которой правила битые (не таблица, неизвестное поле — опечатка вроде kye, значение не того
+-- вида, правило закрытия без key): печать тогда есть и закрыта; off побеждает всё, в том числе битые правила — это
+-- выход из битого конфига
 function config.parse_seal(raw)
   local s = { on = false, key = false, on_sleep = false, remember = true, off = false }
   if raw == nil then return s end
@@ -75,24 +91,21 @@ function config.parse_seal(raw)
   if type(raw) ~= "table" then
     invalid = "seal is not a table"
   else
-    for _, f in ipairs(SEAL_FLAGS) do
-      local v = raw[f]
-      if v ~= nil and type(v) ~= "boolean" then
-        invalid = invalid or (f .. " is not a boolean")
-      elseif v ~= nil then
-        s[f] = v
-      end
+    for k in pairs(raw) do
+      if not SEAL_KIND[k] then invalid = invalid or ("unknown field " .. tostring(k)) end
     end
-    local m = raw.minutes
-    if m ~= nil then
-      if type(m) == "number" and m >= 1 and m < math.huge and m == math.floor(m) then
-        s.minutes = m
-      else
-        invalid = invalid or "minutes is not an integer >= 1"
+    for _, f in ipairs(config.SEAL_FIELDS) do
+      local v = raw[f.name]
+      if v ~= nil then
+        if valid_value(f.kind, v) then
+          s[f.name] = v
+        else
+          invalid = invalid or (f.name .. (f.kind == "boolean" and " is not a boolean" or " is not an integer >= 1"))
+        end
       end
     end
     -- правило закрытия без ключа: закрыть можно, открыть нечем
-    if not s.key and (m ~= nil or s.on_sleep) then
+    if not s.key and (raw.minutes ~= nil or s.on_sleep) then
       invalid = invalid or "close rule without key"
     end
   end
@@ -100,6 +113,18 @@ function config.parse_seal(raw)
   s.invalid = invalid
   s.on = invalid ~= nil or s.key
   return s
+end
+
+-- строка Lua «seal = { … },» для config.lua устройства: поля, заданные в raw, значениями после разбора, в порядке
+-- SEAL_FIELDS. -> строка | nil, причина (битые правила не пишутся)
+function config.seal_lua(raw)
+  local s = config.parse_seal(raw)
+  if s.invalid then return nil, s.invalid end
+  local parts = {}
+  for _, f in ipairs(config.SEAL_FIELDS) do
+    if raw[f.name] ~= nil then parts[#parts + 1] = f.name .. " = " .. tostring(s[f.name]) end
+  end
+  return "seal = { " .. table.concat(parts, ", ") .. " },"
 end
 
 function config.load(path)

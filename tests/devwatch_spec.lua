@@ -99,6 +99,24 @@ local function controller_stubs(seen)
   }
 end
 
+-- старое слово в конфиге устройства: печати нет, в лог — предупреждение (Review Focus 5); без слова строки нет
+function tests.test_legacy_word_warned_in_log()
+  for _, legacy in ipairs({ true, false }) do
+    local seen, warns = {}, {}
+    local stubs = controller_stubs(seen)
+    stubs["riddle.config"] = { load = function() return { seal = { on = false }, legacy_word = legacy or nil } end }
+    stubs["logger"] = { info = function() end, err = function() end,
+      warn = function(...) warns[#warns + 1] = table.concat({ ... }, " ") end }
+    local plugin = load_plugin({}, stubs)
+    plugin:openDiary()
+    local hit = false
+    for _, w in ipairs(warns) do
+      if w:find("riddle: config password_variants ignored (seal is a drawn key now)", 1, true) then hit = true end
+    end
+    t.eq(hit, legacy, "предупреждение при legacy_word=" .. tostring(legacy) .. ": " .. table.concat(warns, " | "))
+  end
+end
+
 local function open_diary_deps(files)
   local seen = {}
   local plugin = load_plugin(files, controller_stubs(seen))

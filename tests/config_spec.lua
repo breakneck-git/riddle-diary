@@ -282,6 +282,25 @@ function tests.test_seal_non_bool_flags_invalid()
   t.ok(type(s.invalid) == "string")
 end
 
+-- опечатка в имени поля (kye) — не «печати нет», а битый конфиг: печать закрыта
+function tests.test_seal_unknown_field_invalid()
+  for _, body in ipairs({ "seal = { kye = true }", "seal = { key = true, minute = 5 }", 'seal = { key = true, [1] = "x" }' }) do
+    local s = seal_of(body)
+    t.eq(s.on, true, "закрыта: " .. body)
+    t.ok(type(s.invalid) == "string" and s.invalid:find("unknown", 1, true), "причина: " .. body .. " / " ..
+      tostring(s.invalid))
+  end
+  t.eq(seal_of("seal = { kye = true, off = true }").on, false, "off — выход и из опечатки")
+end
+
+-- список полей объявлен один раз: разбор знает ровно их
+function tests.test_seal_fields_single_list()
+  t.ok(#config.SEAL_FIELDS >= 5, "поля печати")
+  for _, f in ipairs(config.SEAL_FIELDS) do
+    t.ok(type(f.name) == "string" and (f.kind == "boolean" or f.kind == "count"), tostring(f.name))
+  end
+end
+
 function tests.test_seal_remember_false()
   local s = seal_of("seal = { key = true, remember = false }")
   t.eq(s.remember, false)

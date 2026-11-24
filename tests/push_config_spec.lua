@@ -61,6 +61,22 @@ function tests.test_writes_keys_and_seal()
   t.eq(cfg.seal.remember, true)
 end
 
+-- каждое поле единого списка config.SEAL_FIELDS доходит до устройства: скрипт не держит своего списка полей
+function tests.test_push_writes_every_seal_field_from_config_list()
+  local SAMPLE = { boolean = true, count = 7 }
+  local parts, want = {}, {}
+  for _, f in ipairs(config.SEAL_FIELDS) do
+    want[f.name] = SAMPLE[f.kind]
+    parts[#parts + 1] = f.name .. " = " .. tostring(SAMPLE[f.kind])
+  end
+  local dir = sandbox("GEMINI_API_KEY=fake_gem_CCC\n", "seal = { " .. table.concat(parts, ", ") .. " },\n")
+  local out, ok = run_script(dir)
+  t.ok(ok, out)
+  local raw = dofile(dir .. "/out.lua").seal
+  for _, f in ipairs(config.SEAL_FIELDS) do t.eq(raw[f.name], want[f.name], "поле " .. f.name) end
+  for k in pairs(raw) do t.ok(want[k] ~= nil, "лишнее поле " .. tostring(k)) end
+end
+
 -- все поля печати доходят до устройства как есть (в т.ч. off и remember = false)
 function tests.test_seal_fields_round_trip()
   local dir = sandbox("GEMINI_API_KEY=fake_gem_CCC\n",
@@ -91,8 +107,7 @@ function tests.test_missing_seal_file_writes_config_without_seal()
 end
 
 function tests.test_seal_file_without_seal_writes_no_seal_fields()
-  for _, text in ipairs({ '', '-- пусто\n', 'password_variants = { "fakeword" },\n',
-      'hints = { "только подсказка" },\n' }) do
+  for _, text in ipairs({ '', '-- пусто\n', 'hints = { "только подсказка" },\n' }) do
     local dir = sandbox("GEMINI_API_KEY=fake_gem_CCC\n", text)
     local out, ok = run_script(dir)
     t.ok(ok, "файл без слова — успех: " .. text .. " / " .. out)
@@ -102,6 +117,18 @@ function tests.test_seal_file_without_seal_writes_no_seal_fields()
     f:close()
     t.ok(not raw:find("seal", 1, true) and not raw:find("password_variants", 1, true) and
       not raw:find("hints", 1, true) and not raw:find("fakeword", 1, true), "в конфиге нет полей печати: " .. raw)
+  end
+end
+
+-- старое слово в файле печати без таблицы seal — отказ: иначе после деплоя печать молча пропала бы
+function tests.test_legacy_word_in_seal_file_refused()
+  for _, text in ipairs({ 'password_variants = { "fakeword" },\n', 'hints = { "стих" },\npassword_variants = {},\n' }) do
+    local dir = sandbox("GEMINI_API_KEY=fake_gem_CCC\n", text)
+    local out, ok = run_script(dir)
+    t.ok(not ok, "старое слово — ошибка: " .. out)
+    t.eq(io.open(dir .. "/out.lua", "r"), nil, "на устройство ничего не ушло")
+    t.ok(out:find("seal", 1, true) and out:find("password_variants", 1, true), "сказано, что перенести: " .. out)
+    t.ok(not out:find("fakeword", 1, true), "слово не в выводе")
   end
 end
 
@@ -128,7 +155,8 @@ end
 function tests.test_bad_seal_file_writes_nothing_and_fails()
   for _, bad in ipairs({ 'seal = { key = true ', 'this is not lua', 'seal = { minutes = 5 },\n',
       'seal = { on_sleep = true },\n', 'seal = { key = true, minutes = 0 },\n',
-      'seal = { key = true, minutes = 2.5 },\n', 'seal = { key = "yes" },\n', 'seal = true,\n' }) do
+      'seal = { key = true, minutes = 2.5 },\n', 'seal = { key = "yes" },\n', 'seal = true,\n',
+      'seal = { kye = true },\n' }) do
     local dir = sandbox("GEMINI_API_KEY=fake_gem_CCC\n", bad)
     local out, ok = run_script(dir)
     t.ok(not ok, "битый файл печати — ошибка: " .. bad .. " / " .. out)
