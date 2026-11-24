@@ -51,9 +51,12 @@ local function drawing_ok(d)
 end
 
 -- текст файла -> образец | nil (битый, недописанный, не того вида). Файл — данные: пустое окружение, ни одной
--- глобальной функции
+-- глобальной функции. До loadstring — только знаки формата (encode): методы строк доступны и в пустом окружении
+-- (("x"):rep(1e9) — память Kindle), поэтому код в файле не исполняется вовсе
 function seal.decode(s)
-  if type(s) ~= "string" or s:find("\0", 1, true) then return nil end
+  if type(s) ~= "string" then return nil end
+  local body = s:match("^%s*return(.*)$")
+  if not body or body:find("[^%d%s{},.%-=p]") then return nil end
   local chunk = loadstring(s, "=seal_key")
   if not chunk then return nil end
   setfenv(chunk, {})

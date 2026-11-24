@@ -131,6 +131,9 @@ local function make(opts)
     log = function(msg) env.logs[#env.logs + 1] = msg end,
     devmode = opts.devmode,
     knowledge_text = opts.knowledge_text,
+    -- образец ключа (seal.load_key / file.write_atomic в app.new_controller); нет — стенд образца не знает
+    load_key = opts.load_key,
+    write_key = opts.write_key,
   }
   -- путь через дочерний процесс: remote_fn создаётся в родителе, run выполняется «в дочернем»,
   -- absorb разбирает payload в родителе (здесь — тот же сценарий llm_call)
@@ -351,6 +354,91 @@ function T.test_seal_closed_text()
   t.eq(texts.seal_closed, "Печать легла. Страницы молчат.")
 end
 
+-- графический ключ (план seal-key, задача 6): образец — две розы владельца, страница-ключ — key_page ---------------
+local O = require("fixtures.rose_owner")
+local TF = require("fixtures.triangle_strokes")
+
+local function keyed(opts)
+  opts = opts or {}
+  opts.load_key = function() return { O.owner_01, O.owner_02 } end
+  return make(opts)
+end
+
+function T.test_key_opens_then_closes()
+  local env = keyed()
+  t.ok(not env.ctrl.seal_open)
+  local text = env.ctrl:key_page(O.owner_03)
+  t.ok(in_list(texts.welcomes, text), "закрытую ключ открывает приветствием: " .. tostring(text))
+  t.ok(env.ctrl.seal_open)
+  t.eq(env.ctrl:key_page(O.owner_04), texts.seal_closed, "открытую тот же ключ закрывает")
+  t.ok(not env.ctrl.seal_open)
+  t.eq(#env.llm_calls, 0, "ключ не зовёт модель")
+  t.eq(#env.memory.adds, 0, "ключ не пишется в память")
+end
+
+-- промах — обычная страница: key_page молчит, печать на месте
+function T.test_wrong_figure_is_normal_page()
+  local env = keyed()
+  t.eq(env.ctrl:key_page(TF.equilateral), nil, "треугольник — не ключ")
+  t.eq(env.ctrl:key_page(TF.letter_a), nil, "буква — не ключ")
+  t.eq(env.ctrl:key_page({}), nil)
+  local six = {}
+  for i = 1, 6 do six[i] = O.owner_03[1] end
+  t.eq(env.ctrl:key_page(six), nil, "страница со словами не сравнивается")
+  t.ok(not env.ctrl.seal_open)
+end
+
+-- Review Focus 1: ответ, собранный при открытой печати, пришёл после закрытия ключом — не показывается и не
+-- пишется; в лог — только факт
+function T.test_answer_in_flight_dropped_on_close()
+  local env = keyed()
+  env.ctrl:key_page(O.owner_03)
+  env:say("мои дела", "СЕКРЕТ")
+  local job = env.ctrl:begin(PNG)
+  t.ok(job and job.mode == "open", "запрос собран при открытой печати")
+  t.eq(env.ctrl:key_page(O.owner_04), texts.seal_closed)
+  local adds = #env.memory.adds
+  t.eq(env.ctrl:finish(job, job.run()), nil, "ответ после закрытия не показывается")
+  t.eq(#env.memory.adds, adds, "и не пишется в память")
+  t.ok(logged(env, "riddle: answer dropped, seal changed"), table.concat(env.logs, "\n"))
+  for _, l in ipairs(env.logs) do t.ok(not has(l, "СЕКРЕТ"), "текста ответа в логе нет: " .. l) end
+  -- печать не сдвигалась — ответ показывается, как всегда
+  env:say("кто ты", "Ответ.")
+  local job2 = env.ctrl:begin(PNG)
+  t.eq(env.ctrl:finish(job2, job2.run()), "Ответ.")
+end
+
+-- и обратно: ответ закрытой печати, пришедший после открытия, — не реплика открытого разговора
+function T.test_closed_answer_dropped_on_open()
+  local env = keyed()
+  env:say("кто ты", "Мои страницы молчат…")
+  local job = env.ctrl:begin(PNG)
+  t.ok(job.closed, "запрос без данных")
+  env.ctrl:key_page(O.owner_03)
+  t.ok(env.ctrl.seal_open)
+  t.eq(env.ctrl:finish(job, job.run()), nil)
+  t.eq(#env.ctrl.closed_turns, 0, "реплика закрытой печати не легла в связность после открытия")
+end
+
+-- задание ключа (задача 5): образец записан — печать открыта с хвостом, связность закрытой печати сброшена (M8)
+function T.test_key_saved_opens_with_followup()
+  local writes = {}
+  local env = make({
+    load_key = function() return nil, "absent" end,
+    write_key = function(path, s) writes[#writes + 1] = s return true end,
+  })
+  env:say("кто ты", "Мои страницы молчат…")
+  env:page()
+  t.ok(#env.ctrl.closed_turns > 0, "закрытый разговор шёл")
+  t.ok(not env.ctrl.followup_due)
+  local square_again = { { p = { 230, 320, 560, 310, 545, 660, 215, 640, 230, 320 } } }
+  t.eq(env.ctrl:key_page(TF.square), texts.key_again)
+  t.eq(env.ctrl:key_page(square_again), texts.key_saved)
+  t.eq(#writes, 1)
+  t.eq(env.ctrl.followup_due, true, "хвост (лор, пересказ) положен")
+  t.eq(#env.ctrl.closed_turns, 0, "связность закрытой печати сброшена")
+end
+
 -- печати нет или конфиг битый — ключ печать не сдвигает
 function T.test_toggle_without_seal_or_invalid_is_noop()
   local env = make({ seal = false })
@@ -514,20 +602,21 @@ local function owner_names(env)
 end
 
 -- решение о записи принимается в начале страницы: начатая при закрытой печати с remember = false не ложится в
--- память (ни реплики, ни имя), даже если печать открылась до ответа
+-- память (ни реплики, ни имя), даже если печать открылась до ответа. Сам ответ не показывается (задача 6, Review
+-- Focus 1)
 function T.test_write_decided_at_page_start()
   local env = data_env({ seal = { key = true, remember = false } })
   local names = owner_names(env)
   env.script[1] = { read = "ЗАКРЫТАЯ-ЗАПИСЬ", reply = "ЗАКРЫТЫЙ-ОТВЕТ", name = "Гарри" }
   local job = env.ctrl:begin(PNG)
   env:unlock()
-  t.eq(env.ctrl:finish(job, job.run()), "ЗАКРЫТЫЙ-ОТВЕТ")
+  t.eq(env.ctrl:finish(job, job.run()), nil)
   t.eq(#env.memory.adds, 0, "страница закрытой печати в память не легла")
   t.eq(#names, 0, "и имя не записано")
 end
 
 -- реплика страницы, начатой при открытой печати, не идёт в связность закрытой, даже если печать закрылась до ответа:
--- её запрос собран с данными
+-- её запрос собран с данными. Сам ответ не показывается (задача 6, Review Focus 1)
 function T.test_open_page_answered_after_close_not_in_closed_turns()
   local env = data_env({ seal = { key = true, remember = false } })
   env:unlock()
@@ -535,7 +624,7 @@ function T.test_open_page_answered_after_close_not_in_closed_turns()
   local job = env.ctrl:begin(PNG)
   env.ctrl:seal_toggle()
   t.ok(not env.ctrl.seal_open, "печать закрыта до ответа")
-  t.eq(env.ctrl:finish(job, job.run()), "ОТКРЫТЫЙ-ОТВЕТ")
+  t.eq(env.ctrl:finish(job, job.run()), nil)
   env:say("закрытая", "ответ"); env:page()
   local s = json.encode(env.llm_calls[2].messages)
   t.ok(is_closed_call(env.llm_calls[2]), "второй запрос — закрытой печати")

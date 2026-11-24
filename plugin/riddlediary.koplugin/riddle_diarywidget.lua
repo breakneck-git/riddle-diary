@@ -1385,7 +1385,8 @@ function Diary:onPageDone()
         local phrase = ctl:key_page(pg.strokes)
         if phrase then
             logger.info("riddle: key page")
-            self.queue[#self.queue + 1] = { text = phrase, top = top, page = pg,
+            -- kind "key": not the model's answer -- the pen over it marks no interruption (hurryAnswer)
+            self.queue[#self.queue + 1] = { text = phrase, top = top, page = pg, kind = "key",
                                             unlocked = ctl.seal_open and not was_open }
             self:nextAnswer()
             return
@@ -1649,7 +1650,8 @@ function Diary:answerStep(x, y, w, h)
     if self.test then st.lost_ink = st.lost_ink + self:countLostInk(x, y, w, h) end
 end
 
--- kind: nil (an answer), "think" (thinking phrase), "busy" (refusal), "interject" (interjection) — riddle.hold
+-- kind: nil (an answer), "think" (thinking phrase), "busy" (refusal), "interject" (interjection), "key" (the seal key's
+-- phrase; holds like an answer) — riddle.hold
 -- release: an interjection whose page turned out an accidental touch — no answer follows, it holds on a timer
 -- page: the page the phrase answers (the answer callback matches an interjection on screen by it)
 function Diary:revealAnswer(text, top, unlocked, kind, release, page)

@@ -849,4 +849,66 @@ function T.test_tiny_touch_in_setting_silent()
   t.eq(d.revealed[#d.revealed], texts.key_again, "касание не стало первым рисунком")
 end
 
+-- B4: фраза режима ключа — не ответ модели: перо, оборвавшее её, не делает следующую страницу «перебиванием»
+function T.test_pen_over_key_phrase_no_interjection()
+  local d = setting_diary()
+  page_done(d, dissolved(SQUARE))
+  run(0)
+  t.eq(d.answer and d.answer.phase, "reveal", "фраза ключа проявляется")
+  d.page = { strokes = {}, ink = { 10, 200, 100, 260 } }
+  d:hurryAnswer()
+  t.ok(not d.page.interrupted, "страница не помечена перебитой")
+  d:onPageDone()
+  for _, q in ipairs(d.queue) do t.ok(q.kind ~= "interject", "реплики на перебивание нет") end
+end
+
+-- ключ задан: образец — две розы владельца
+local O = require("fixtures.rose_owner")
+
+local function keyed_diary()
+  return diary({ load_key = function() return { O.owner_01, O.owner_02 } end })
+end
+
+-- Proposal 41d13e60-bc8d-81a8: devmode, закрытая печать, образец есть — ни промах ключа, ни сам ключ в roses не
+-- пишутся (на закрытом Kindle файл штрихов показал бы знак)
+function T.test_closed_seal_no_record_of_failed_sign()
+  local d = keyed_diary()
+  d.devmode, d.rose_dir = true, tmpdir()
+  page_done(d, strokes_of(TF, "letter_a"))
+  t.eq(#files(d.rose_dir), 0, "промах из двух штрихов — файла нет")
+  t.eq(d.controller.seal_open, false)
+  page_done(d, dissolved(O.owner_03))
+  t.eq(d.controller.seal_open, true, "ключ открыл печать")
+  t.eq(#files(d.rose_dir), 0, "ключ — файла нет")
+end
+
+-- ключ открывает и закрывает печать со страницы; модель не зовётся
+function T.test_key_page_toggles_seal()
+  local d = keyed_diary()
+  page_done(d, dissolved(O.owner_03))
+  run(1)
+  t.eq(d.controller.seal_open, true)
+  local welcome = false
+  for _, w in ipairs(texts.welcomes) do welcome = welcome or d.revealed[1] == w end
+  t.ok(welcome, "приветствие на экране: " .. tostring(d.revealed[1]))
+  page_done(d, dissolved(O.owner_04))
+  run(120)
+  t.eq(d.controller.seal_open, false)
+  t.eq(d.revealed[#d.revealed], texts.seal_closed)
+  t.eq(not_probe(d), 0, "модель не звали")
+end
+
+-- ответ в пути, а ключ сдвинул печать (Review Focus 1): ответ не показывается
+function T.test_answer_in_flight_not_shown_after_key()
+  local d = keyed_diary()
+  page_done(d) -- страница при закрытой печати: ответ в пути
+  t.eq(d.inflight, 1)
+  page_done(d, dissolved(O.owner_03))
+  t.eq(d.controller.seal_open, true, "ключ сработал и во время ответа")
+  d.runner:done(reply("кто ты", "СТАРЫЙ ОТВЕТ"), nil, 1)
+  run(300)
+  for _, s in ipairs(d.revealed) do t.ok(s ~= "СТАРЫЙ ОТВЕТ", "ответ закрытой печати не показан") end
+  t.eq(d.inflight, 0, "страница больше не ждёт")
+end
+
 t.run(T)

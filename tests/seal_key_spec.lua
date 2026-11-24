@@ -201,6 +201,28 @@ function T.test_decode_has_no_globals()
   t.eq(seal.decode("return { { {p={1,2,3,4}} }, x = os.time() }"), nil)
 end
 
+-- B1: методы строк доступны и в пустом окружении (метатаблица строк) — файл с кодом не исполняется вовсе: до
+-- loadstring пропускаются только знаки формата образца
+function T.test_decode_rejects_code()
+  t.eq(seal.decode('return { { {p={1,2,3,#("x"):rep(10)}} } }'), nil, "вызов метода строки")
+  t.eq(seal.decode("return { { {p={1,2,3,4}} } } --[[ x ]]"), nil, "чужие знаки")
+  t.eq(seal.decode("return { { {p={1,2,3,0x10}} } }"), nil, "чужие знаки: x")
+  local s = seal.encode({ SQUARE, TR.letter_de, { { p = { -1.5, 2.25, 300, 400 } } } })
+  t.eq(seal.encode(seal.decode(s)), s, "образец в своём формате читается, как прежде")
+end
+
+-- M7: образец не записался (FAT, нет места) — «не совпало», печать закрыта, режим задания остаётся
+function T.test_write_failure_keeps_setting()
+  local env = make()
+  env.deps.write_key = function() return nil, "No space left on device" end
+  t.eq(env.ctl:key_page(SQUARE), texts.key_again)
+  t.eq(env.ctl:key_page(SQUARE_AGAIN), texts.key_retry)
+  t.eq(env.ctl.seal_open, false, "печать закрыта")
+  t.eq(env.ctl.seal.setting, true, "режим задания остаётся")
+  t.ok(logged(env, "riddle: seal key write failed"), table.concat(env.logs, "\n"))
+  t.eq(env.ctl:key_page(SQUARE), texts.key_again, "режим заново: следующий рисунок — первый")
+end
+
 -- §9, решение владельца «А»: пока стоит off, образец удаляется; печати нет
 function T.test_off_deletes_key_file_fake()
   local env = make(stand.rules({ key = true, off = true }), { [KEY] = seal.encode({ SQUARE, SQUARE_AGAIN }) })
@@ -304,6 +326,23 @@ function T.test_real_broken_key_file()
   for _, l in ipairs(logs) do hit = hit or l:find("riddle: seal key unreadable", 1, true) ~= nil end
   t.ok(hit, "лог о битом образце")
   t.eq(slurp(path), "return { {{p={1,2,", "битый образец не перезаписан")
+end
+
+-- M11: файл не открылся не потому, что его нет (здесь ENOTDIR; на Kindle — EIO, EACCES): «битый», не режим задания
+function T.test_real_open_error_not_absent()
+  local dir = tmpdir()
+  put(dir .. "/file", "x")
+  local path = dir .. "/file/seal_key.lua"
+  local drawings, err = seal.load_key(path)
+  t.eq(drawings, nil)
+  t.eq(err, "broken")
+  local ctl, logs = real(stand.key(), path)
+  t.eq(ctl.seal.setting, false, "режим задания не включается")
+  t.eq(ctl.seal_open, false)
+  t.ok(ctl:opening_text() ~= texts.key_draw)
+  local hit = false
+  for _, l in ipairs(logs) do hit = hit or l:find("riddle: seal key unreadable", 1, true) ~= nil end
+  t.ok(hit, "лог о битом образце")
 end
 
 t.run(T)

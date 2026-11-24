@@ -67,6 +67,9 @@ function Controller.new(deps)
     -- реплики { role, text } с момента закрытия печати: связность разговора без памяти (spec §4). Живут в процессе,
     -- сбрасывает открытие (seal_toggle)
     closed_turns = {},
+    -- растёт на каждом открытии и закрытии печати (seal_toggle, _opened): ответ, собранный до сдвига, не
+    -- показывается (finish)
+    seal_epoch = 0,
     bags = {},
     pools = {}, -- сгенерированные наборы фраз: "id:name" -> { src, list } (Controller:texts)
   }
@@ -118,13 +121,21 @@ function Controller:_load_key()
   end
 end
 
--- страница из штрихов (виджет, до треугольника) -> фраза | nil. В режиме «задать ключ» страница до
--- glyph.MAX_STROKES штрихов — попытка знака: модель её не видит, в память она не идёт (спека §5, шаги 2–6).
+-- страница из штрихов (виджет, до треугольника) -> фраза | nil. Ключ задан — страница, совпавшая с образцом
+-- (glyph.match), сдвигает печать (seal_toggle): закрытую открывает, открытую закрывает; модель не зовётся.
+-- В режиме «задать ключ» страница до glyph.MAX_STROKES штрихов — попытка знака: модель её не видит, в память она
+-- не идёт (спека §5, шаги 2–6).
 -- Первый рисунок живёт только в памяти (key_first; сон, закрытие и перезапуск его сбрасывают); второй
 -- сверяется с ним, совпал — образец из обоих пишется на устройство и печать открывается. Не совпал — режим заново,
 -- без счётчика попыток. Иначе nil: страница идёт дальше по порядку
 function Controller:key_page(strokes)
-  if not self.seal.setting or #strokes == 0 or #strokes > glyph.MAX_STROKES then return nil end
+  if #strokes == 0 or #strokes > glyph.MAX_STROKES then return nil end
+  local drawings = self.seal.drawings
+  if drawings then
+    if not glyph.match(strokes, drawings) then return nil end
+    return self:seal_toggle()
+  end
+  if not self.seal.setting then return nil end
   local fits, why = glyph.fits(strokes)
   if not fits then return why == "size" and texts.key_bigger or texts.key_taken end
   local first = self.key_first
@@ -1114,6 +1125,7 @@ end
 -- хвост (лор, пересказ ждущей сессии) положен, как на старте без печати
 function Controller:_opened()
   self:_log("riddle: seal opened by key")
+  self.seal_epoch = self.seal_epoch + 1
   self.closed_turns = {}
   self.followup_due = true
 end
@@ -1125,6 +1137,7 @@ function Controller:seal_toggle()
   if not s.configured then return nil end
   if s.open then
     s:lock("key")
+    self.seal_epoch = self.seal_epoch + 1
     self:_log("riddle: seal closed by key")
     return texts.seal_closed
   end
@@ -1156,14 +1169,25 @@ end
 
 -- асинхронный путь (виджет + riddle.worker): begin в родителе, job.run() в дочернем,
 -- finish в родителе с его payload (через deps.absorb) или ошибкой runner'а ("timeout", "crashed", …)
+-- job.epoch — эпоха печати на начало страницы (finish сверяет)
 function Controller:begin(png_path)
-  return self:_begin(png_path, true)
+  local job, text = self:_begin(png_path, true)
+  if job then job.epoch = self.seal_epoch end
+  return job, text
 end
 
 -- Свёртка назрела — хвост после этого ответа (take_followup). Только здесь: свёртка идёт лишь через runner, и в
 -- синхронном пути (on_page) повода для хвоста нет; страница разблокировки реплик не пишет
 -- -> текст | nil, действие ("map": страница открыла карту, или страница на карте её закрыла)
+-- Печать сдвинулась, пока ответ был в пути (ключ, задача 6; Review Focus 1): ответ разговора (mode "open") собран
+-- при другой печати — не показывается и не пишется (nil); payload всё же уходит в цепочку (deps.absorb: логи, мёртвые
+-- ключи). Задания разбора строки и карты — как всегда
 function Controller:finish(job, payload, err)
+  if job.mode == "open" and job.epoch ~= nil and job.epoch ~= self.seal_epoch then
+    if payload ~= nil then pcall(self.deps.absorb, payload) end
+    self:_log("riddle: answer dropped, seal changed")
+    return nil
+  end
   local text, action = self:_safe_answer(job, function()
     if payload == nil then return nil, err end
     return self.deps.absorb(payload)
