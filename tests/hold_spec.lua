@@ -105,14 +105,15 @@ function T.test_busy_keeps_timed_hold()
   t.eq(hold.seconds(6, 0, 1, "busy"), 6)
 end
 
--- что переживает сон (Notion 40813e60): без печати — реплика, которая стоит до касания; фраза-раздумье —
--- не реплика; с печатью сон стирает всё (иначе разговор видит любой, кто взял Kindle)
+-- что переживает сон (Notion 40813e60): если сон не закрывает печать — реплика, которая стоит до касания;
+-- фраза-раздумье — не реплика; сон закрывает печать (on_sleep) — стирает всё (иначе разговор видит любой, кто взял
+-- Kindle)
 function T.test_sleep_keeps_the_answer_that_waits_for_a_touch()
-  t.ok(hold.survives_sleep(false, nil, "hold", false), "ответ без таймера, печати нет — остаётся")
+  t.ok(hold.survives_sleep(false, nil, "hold", false), "ответ без таймера, сон печать не закрывает — остаётся")
   t.ok(hold.survives_sleep(false, nil, "reveal", false), "проявление застал сон — остаётся")
 end
 
-function T.test_sleep_wipes_everything_under_a_seal()
+function T.test_sleep_wipes_everything_when_sleep_closes_the_seal()
   t.ok(not hold.survives_sleep(true, nil, "hold", false), "печать закрывается — страница чистая")
   t.ok(not hold.survives_sleep(true, nil, "reveal", false))
 end

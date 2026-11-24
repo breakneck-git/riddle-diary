@@ -1,5 +1,5 @@
 -- Печать: закрыта она или открыта, по правилам cfg.seal (config.parse_seal). Логика без UI и сети.
--- Открывает только ключ (Controller:seal_toggle); закрывают ключ, сон (on_sleep) и простой (minutes, задача 7).
+-- Открывает только ключ (Controller:seal_toggle); закрывают ключ, сон (on_sleep) и простой (minutes: Seal:due).
 -- Образец ключа (спека 2026-11-20-seal-key §5) — файл KEY_PATH, его пишет сам дневник: encode/decode — формат,
 -- load_key/forget_key — чтение и удаление на устройстве (app.new_controller передаёт их контроллеру).
 local glyph = require("riddle.glyph")
@@ -146,9 +146,20 @@ function Seal:touch(now)
   self.last_at = now
 end
 
--- простой истёк — пора закрыть. Тело — задача 7
+-- секунды до закрытия по простою (правило minutes, spec §6) | nil: закрывать по времени нечего (правила нет, печать
+-- закрыта, записи не было). Часы ушли назад (now < last_at; NTP, ручная правка — Review Focus 3): отсчёт заново от
+-- now — раньше срока печать не закроется
+function Seal:left(now)
+  local minutes = self.rules.minutes
+  if not (minutes and self.open and self.last_at) then return nil end
+  if now < self.last_at then self.last_at = now end
+  return self.last_at + minutes * 60 - now
+end
+
+-- простой истёк — пора закрыть
 function Seal:due(now)
-  return false
+  local left = self:left(now)
+  return left ~= nil and left <= 0
 end
 
 function Seal:closes_on_sleep()

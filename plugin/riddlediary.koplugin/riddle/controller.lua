@@ -67,7 +67,7 @@ function Controller.new(deps)
     -- реплики { role, text } с момента закрытия печати: связность разговора без памяти (spec §4). Живут в процессе,
     -- сбрасывает открытие (seal_toggle)
     closed_turns = {},
-    -- растёт на каждом открытии и закрытии печати (seal_toggle, _opened): ответ, собранный до сдвига, не
+    -- растёт на каждом открытии и закрытии печати (_opened, _close): ответ, собранный до сдвига, не
     -- показывается (finish)
     seal_epoch = 0,
     bags = {},
@@ -886,6 +886,8 @@ end
 -- with_run: job.run для дочернего процесса (deps.remote_fn; создаётся в родителе — сдвиг ключа)
 function Controller:_begin(png_path, with_run)
   local deps = self.deps
+  -- просроченная печать закрывается до всего остального: данные не уходят и без таймера виджета (spec §6)
+  self:seal_check(deps.now())
   self:_config_changed() -- строка конфига читается заново раз на страницу
   local png_b64, fail = self:_page_b64(png_path)
   if not png_b64 then return nil, fail end
@@ -1134,17 +1136,33 @@ function Controller:_opened()
   self.followup_due = true
 end
 
+-- открытая печать закрывается: ключ, сон, простой (reason — "key", "sleep", "idle"). Эпоха растёт — ответ, собранный
+-- при открытой, не показывается (finish). -> true | false: закрывать было нечего (печати нет или уже закрыта)
+function Controller:_close(reason)
+  if not (self.seal.open and self.seal:lock(reason)) then return false end
+  self.seal_epoch = self.seal_epoch + 1
+  self:_log("riddle: seal closed by " .. reason)
+  return true
+end
+
+-- простой истёк (правило minutes, spec §6) — печать закрывается. now — по умолчанию deps.now(). Зовут начало
+-- страницы (_begin), таймер виджета и пробуждение: таймеры KOReader во сне не идут. -> true: закрыл
+function Controller:seal_check(now)
+  if not self.seal:due(now or self.deps.now()) then return false end
+  return self:_close("idle")
+end
+
+-- секунды до закрытия по простою | nil: по времени не закроется (виджет взводит по ним таймер)
+function Controller:seal_left(now)
+  return self.seal:left(now or self.deps.now())
+end
+
 -- ключ узнан (задача 6): закрытую печать открывает приветствием, открытую закрывает фразой texts.seal_closed.
 -- Модель не зовётся, в память ничего. -> текст | nil: печать не сдвинулась (её нет или конфиг битый)
 function Controller:seal_toggle()
   local s = self.seal
   if not s.configured then return nil end
-  if s.open then
-    s:lock("key")
-    self.seal_epoch = self.seal_epoch + 1
-    self:_log("riddle: seal closed by key")
-    return texts.seal_closed
-  end
+  if self:_close("key") then return texts.seal_closed end
   if not s:unlock(self.deps.now()) then return nil end
   self:_opened()
   local welcome = self:_pick(self:texts("welcomes"))
@@ -1168,6 +1186,9 @@ function Controller:_safe_answer(job, get)
     if job.mode == "map" then return nil end
     return self:_pick(self:texts("fail_other"))
   end
+  -- отвеченная страница — запись: от неё считается простой (spec §6). Печать, закрытую, пока ответ был в пути, ответ
+  -- не трогает: отсчёт начнёт открытие ключом
+  if job.answered and self:_data_ok() then self.seal:touch(self.deps.now()) end
   return text, action
 end
 
@@ -1183,7 +1204,7 @@ end
 -- Свёртка назрела — хвост после этого ответа (take_followup). Только здесь: свёртка идёт лишь через runner, и в
 -- синхронном пути (on_page) повода для хвоста нет; страница разблокировки реплик не пишет
 -- -> текст | nil, действие ("map": страница открыла карту, или страница на карте её закрыла)
--- Печать сдвинулась, пока ответ был в пути (ключ, задача 6; Review Focus 1): ответ разговора (mode "open") собран
+-- Печать сдвинулась, пока ответ был в пути (ключ, сон, простой; Review Focus 1): ответ разговора (mode "open") собран
 -- при другой печати — не показывается (nil, действие тоже). Разбор идёт как всегда: запись ложится в память по
 -- решению начала страницы (job.write) — чернила растворились, память — единственная копия. Сдвиг считается до
 -- разбора: печать, сдвинутая в пути, а не самим ответом
@@ -1537,7 +1558,7 @@ function Controller:on_sleep()
   self.map_hold, self.map_next = nil, nil -- после сна — новая попытка данных карты, пересказ раньше неё
   self.roll_tail = false -- хвост свёртки, не начатый до сна, — не повод для паузы у хвоста после него
   self.tail = false -- и хвост, не начатый до сна: после него хвост берётся заново
-  if self.seal:closes_on_sleep() then self.seal:lock("sleep") end
+  if self.seal:closes_on_sleep() then self:_close("sleep") end
   -- после сна хвост берётся заново, если данные доступны (печати нет или сон её не закрыл); закрытая — откроет ключ
   if self:_data_ok() then self.followup_due = true end
 end

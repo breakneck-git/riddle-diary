@@ -190,9 +190,11 @@ function T.test_queued_answer_dropped_by_sleep()
   t.eq(d.invite, 1, "на экране приглашение")
 end
 
--- ответ на середине проявления -> сон: ни одной буквы ни после onSuspend, ни после onResume
+-- ответ на середине проявления -> сон, который закрывает печать (on_sleep): ни одной буквы ни после onSuspend, ни
+-- после onResume
 function T.test_revealing_answer_stops_at_sleep()
   local d = wired()
+  d.controller = ctl(stand.rules({ key = true, on_sleep = true }))
   page_done(d)
   d.runner:done(reply("кто ты", "Длинный ответ из многих букв"))
   run(0.15)
@@ -448,6 +450,31 @@ function T.test_async_followup_failure_not_saved()
   d.runner:done(nil, "cancelled")
   t.eq(#saved, 0)
   t.eq(count("riddle: worker summary failed: cancelled"), 1, table.concat(LOG, "\n"))
+end
+
+-- Review Focus 1, таймер простоя: страница начата при открытой печати, простой закрыл печать, пока ответ в пути, —
+-- ответ не показывается, на экране первая строка чистой страницы. Часы контроллера идут с планировщиком
+function T.test_timer_closes_and_drops_in_flight()
+  local d = diary()
+  d.controller = keyed(stand.rules({ key = true, minutes = 30 }), {
+    now = function() return 1000 + math.floor(clock) end,
+    memory = roll_memory({ total = 0 }, {}),
+  })
+  d.invite = 0
+  d.showInvitation = function() d.invite = d.invite + 1 end
+  key_page(d) -- открыта в 1000: от неё отсчёт простоя
+  run(1700 - clock)
+  page_done(d)
+  t.eq(d.inflight, 1, "страница при открытой печати ушла в модель")
+  run(110)
+  t.ok(not d.controller.seal_open, "простой закрыл печать, пока ответ в пути")
+  t.ok(d.answer == nil or d.answer.kind == "think", "на экране не реплика открытой печати (раздумье — заготовка)")
+  t.eq(d.invite, 1, "первая строка чистой страницы")
+  d.runner:done(reply("мои дела", "СЕКРЕТ"))
+  run(120)
+  for _, s in ipairs(d.revealed) do t.ok(s ~= "СЕКРЕТ", "ответ открытой печати не показан") end
+  t.eq(d.inflight, 0, "страница больше не ждёт")
+  t.eq(count("riddle: answer dropped, its page is gone"), 0, "ответ сброшен контроллером, не сбросом страницы")
 end
 
 -- срез 3: перо отменяет фоновое чтение Notion (дочерний "sync"), ответ не трогает

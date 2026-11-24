@@ -40,12 +40,45 @@ function T.test_unlock_lock()
   t.eq(s.open, true)
 end
 
+-- простой считается от последней записи: открытие ключом и отвеченная страница
 function T.test_touch_marks_last_entry()
   local s = new_seal({ key = true, minutes = 5 })
   s:unlock(100)
+  t.eq(s:due(399), false)
   s:touch(250)
-  t.eq(s.last_at, 250)
-  t.eq(s:due(10 ^ 9), false, "правило времени — задача 7")
+  t.eq(s:due(400), false, "запись в 250 отодвинула простой")
+  t.eq(s:due(550), true)
+end
+
+-- правило minutes (spec §6): N минут без записи — пора закрыть
+function T.test_due_after_idle()
+  local s = new_seal({ key = true, minutes = 30 })
+  s:unlock(500)
+  s:touch(1000)
+  t.eq(s:due(1000 + 1799), false)
+  t.eq(s:due(1000 + 1800), true)
+  t.eq(s:left(1000 + 1700), 100, "до закрытия — секунды")
+end
+
+-- Review Focus 3: часы прыгнули назад — простой считается заново от нового «сейчас», раньше срока не закрывает
+function T.test_due_clock_back()
+  local s = new_seal({ key = true, minutes = 30 })
+  s:unlock(1000)
+  t.eq(s:due(500), false)
+  t.eq(s:due(500 + 1799), false, "не раньше срока от прыжка")
+  t.eq(s:due(500 + 1800), true)
+end
+
+-- закрытой печати, печати без minutes и печати без правил закрывать по простою нечего
+function T.test_due_needs_minutes_and_open()
+  local closed = new_seal({ key = true, minutes = 30 })
+  t.eq(closed:due(10 ^ 9), false, "закрыта")
+  t.eq(closed:left(10 ^ 9), nil)
+  local no_minutes = new_seal({ key = true })
+  no_minutes:unlock(0)
+  t.eq(no_minutes:due(10 ^ 9), false, "правила minutes нет")
+  t.eq(no_minutes:left(10 ^ 9), nil)
+  t.eq(new_seal(nil):due(10 ^ 9), false, "печати нет")
 end
 
 function T.test_invalid_never_unlocks()

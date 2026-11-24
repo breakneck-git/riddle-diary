@@ -1,6 +1,6 @@
 -- Сколько ответ дневника держится на экране после проявления, без KOReader.
 -- Последняя реплика стоит бессрочно: растворяет её только касание (владелец 2026-10-23); сон
--- её тоже не трогает, если печати нет (survives_sleep; Notion 40813e60).
+-- её тоже не трогает, если сон не закрывает печать (survives_sleep; Notion 40813e60).
 -- Если за ней ещё ответы (в очереди или в пути) — прежнее удержание, чтобы смена не зависла.
 -- Фраза-раздумье стоит, пока ждёт ответа, и уходит сразу, как только за ней кто-то пришёл.
 local hold = {}
@@ -22,13 +22,14 @@ function hold.seconds(timed_s, queued, inflight, kind, released, think_owed_s)
   return nil
 end
 
--- Переживает ли реплика на экране сон. sealed — у дневника есть печать (сон её закрывает и стирает
--- страницу: иначе разговор видит любой, кто взял Kindle); kind, phase — вид реплики и фаза её
+-- Переживает ли реплика на экране сон. closes_on_sleep — сон закрывает печать (правило on_sleep, spec §6):
+-- страница стирается, иначе разговор видит любой, кто взял Kindle. Печать без этого правила сон не трогает — реплика
+-- стоит, как без печати (простой проверит пробуждение). kind, phase — вид реплики и фаза её
 -- жизни ("reveal", "hold", "fade"); timed — реплика уходит сама (hold.seconds вернул секунды):
 -- за ней ждут другие, а сон роняет и очередь, и запрос. Раздумье — не реплика, растворяющаяся уже уходит.
 -- -> true: оставить реплику целиком, приглашения поверх нет
-function hold.survives_sleep(sealed, kind, phase, timed)
-  if sealed or timed or kind == "think" then return false end
+function hold.survives_sleep(closes_on_sleep, kind, phase, timed)
+  if closes_on_sleep or timed or kind == "think" then return false end
   return phase == "reveal" or phase == "hold"
 end
 

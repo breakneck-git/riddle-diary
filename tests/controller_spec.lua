@@ -1013,6 +1013,81 @@ function T.test_sleep_without_on_sleep_keeps_seal_open()
   t.ok(env.ctrl.seal_open, "правила on_sleep нет — сон печать не закрывает")
 end
 
+-- сон закрывает печать только по on_sleep; закрыв, сдвигает эпоху: ответ, собранный при открытой, не показывается
+-- (Review Focus 1). Без правила ответ в пути показывается, как всегда
+function T.test_sleep_closes_only_with_on_sleep()
+  local keep = make()
+  keep:unlock()
+  keep:say("кто ты", "Ответ.")
+  local job = keep.ctrl:begin(PNG)
+  keep.ctrl:on_sleep()
+  t.ok(keep.ctrl.seal_open, "без on_sleep открыта")
+  t.eq(keep.ctrl:finish(job, job.run()), "Ответ.", "ответ в пути показан")
+
+  local env = make({ seal = { key = true, on_sleep = true } })
+  env:unlock()
+  env:say("мои дела", "СЕКРЕТ")
+  job = env.ctrl:begin(PNG)
+  env.ctrl:on_sleep()
+  t.ok(not env.ctrl.seal_open, "с on_sleep закрыта")
+  t.eq(env.ctrl:finish(job, job.run()), nil, "ответ открытой печати после сна не показывается")
+  t.ok(logged(env, "riddle: answer dropped, seal changed"), table.concat(env.logs, "\n"))
+  t.ok(logged(env, "riddle: seal closed by sleep"), table.concat(env.logs, "\n"))
+end
+
+-- простой (spec §6, правило minutes) ---------------------------------------------------------------------------
+
+-- просроченная печать закрывается в начале страницы, до сборки контекста: данные не уходят и без таймера виджета
+function T.test_idle_closes_before_context()
+  local env = data_env({ seal = { key = true, minutes = 30 } })
+  env:unlock()
+  env:say("кто ты", "Ответ.")
+  env:page()
+  t.ok(not is_closed_call(env.llm_calls[1]), "в 1000 печать открыта")
+  env.now_value = 1000 + 1800
+  env:say("кто ты", "Закрыто.")
+  t.eq(env:page(), "Закрыто.")
+  local s = json.encode(env.llm_calls[2].messages)
+  for _, mark in ipairs(DATA_MARKS) do t.ok(not has(s, mark), "после простоя в запросе " .. mark) end
+  t.ok(is_closed_call(env.llm_calls[2]), "запрос закрытой печати")
+  t.ok(not env.ctrl.seal_open)
+  t.ok(logged(env, "riddle: seal closed by idle"), table.concat(env.logs, "\n"))
+end
+
+-- простой считается от последней отвеченной страницы, не от открытия
+function T.test_answer_postpones_idle()
+  local env = make({ seal = { key = true, minutes = 30 } })
+  env:unlock()
+  env.now_value = 2000
+  env:say("кто ты", "Ответ.")
+  env:page_async()
+  t.eq(env.ctrl:seal_left(2000), 1800, "ответ в 2000 — отсчёт заново")
+  t.eq(env.ctrl:seal_check(1000 + 1800), false, "через 30 минут от открытия ещё открыта")
+  t.ok(env.ctrl.seal_open)
+  t.eq(env.ctrl:seal_check(2000 + 1800), true, "через 30 минут от ответа закрыта")
+  t.ok(not env.ctrl.seal_open)
+  t.eq(env.ctrl:seal_check(2000 + 1800), false, "повтор — закрывать нечего")
+  t.eq(env.ctrl:seal_left(2000 + 1800), nil, "закрытой отсчитывать нечего")
+end
+
+-- Review Focus 1, таймер: страница начата при открытой печати, простой закрыл её, пока ответ в пути, — ответ не
+-- показывается и простой не отодвигает: печать остаётся закрытой
+function T.test_timer_closes_and_drops_in_flight()
+  local env = make({ seal = { key = true, minutes = 30 } })
+  env:unlock()
+  env.now_value = 1000 + 1700
+  env:say("мои дела", "СЕКРЕТ")
+  local job = env.ctrl:begin(PNG)
+  t.ok(job and job.mode == "open" and not job.closed, "запрос собран при открытой печати")
+  t.eq(env.ctrl:seal_check(1000 + 1800), true, "простой закрыл печать")
+  env.now_value = 1000 + 1810
+  t.eq(env.ctrl:finish(job, job.run()), nil, "ответ после закрытия не показывается")
+  t.ok(not env.ctrl.seal_open)
+  t.eq(env.ctrl:seal_left(), nil, "ответ закрытую не открыл и отсчёта не начал")
+  t.ok(logged(env, "riddle: answer dropped, seal changed"), table.concat(env.logs, "\n"))
+  for _, l in ipairs(env.logs) do t.ok(not has(l, "СЕКРЕТ"), "текста ответа в логе нет: " .. l) end
+end
+
 function T.test_session_continues_after_sleep()
   local env = make({ now = 0, seal = { key = true, on_sleep = true } })
   env:unlock()

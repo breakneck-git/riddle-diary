@@ -41,8 +41,11 @@ and sleep kill it (not saved: the next followup asks again).
 Without a runner the controller is called synchronously and blocks the UI loop for up
 to the 8 s budget. Sleep (Suspend) kills the request, drops pending answers, the queue and the
 strokes; the page is wiped and wake-up (Resume) shows a clean page with the invitation -- unless
-the diary has no seal and a reply waits for a touch (riddle.hold survives_sleep): that reply stays
-whole on the page and no invitation covers it. With a seal sleep wipes everything.
+sleep does not close the seal (no seal, or no on_sleep rule) and a reply waits for a touch (riddle.hold
+survives_sleep): that reply stays whole on the page and no invitation covers it. When sleep closes the
+seal it wipes everything. The seal's idle rule (minutes): after every reply a timer runs to the seal's
+deadline; when it fires, or at wake-up past it (KOReader's timers do not run in sleep), the seal closes and
+the reply on screen is wiped -- the first line of a clean page shows instead.
 
 Test harness: riddle/devtest.lua, loaded only when /mnt/us/riddle/devmode exists.
 --]]
@@ -742,7 +745,11 @@ end
 -- into one refresh -- the reply goes onto the canvas before it.
 function Diary:onResume()
     if not self.canvas then return end
-    local a = self.answer
+    -- KOReader's timers do not run in sleep: the seal's idle rule is checked here; a seal closed by it wipes the kept
+    -- reply (resetPage frees it) -- the first line of a clean page shows instead
+    local ctl = self.controller
+    local closed = ctl ~= nil and ctl:seal_check()
+    local a = not closed and self.answer or nil
     if a then
         local r = a.block.rect
         self:paintRegion(r.x, r.y, r.w, r.h)
@@ -751,6 +758,7 @@ function Diary:onResume()
         self:showInvitation(false)
     end
     self:trayShow("resume")
+    self:armSeal()
     UIManager:nextTick(function()
         if self.canvas then UIManager:setDirty(self, "full") end
     end)
@@ -762,7 +770,42 @@ function Diary:replySurvivesSleep()
     if not a then return false end
     local ctl = self.controller
     local timed = self:holdFor(a, 0) ~= nil
-    return hold.survives_sleep(ctl ~= nil and ctl.seal.configured, a.kind, a.phase, timed)
+    return hold.survives_sleep(ctl ~= nil and ctl.seal:closes_on_sleep(), a.kind, a.phase, timed)
+end
+
+-- The seal's idle timer (rule minutes, spec 2026-11-20-seal-key §6): runs to the controller's deadline
+-- (Controller:seal_left -- the last entry plus N minutes), the previous one dropped. Armed after every reply
+-- (revealAnswer), at wake-up and back from a mode: the deadline is the controller's, so arming again never moves it.
+-- When it fires the controller checks the rule itself (the clock may have moved): closed -- the reply is wiped;
+-- still open -- armed again to the new deadline
+function Diary:armSeal()
+    self:cancel(self.seal_task)
+    self.seal_task = nil
+    local ctl = self.controller
+    local left = ctl and ctl:seal_left()
+    if not left then return end
+    self.seal_task = self:schedule(math.max(0, left), function()
+        self.seal_task = nil
+        local c = self.controller
+        if c and c:seal_check() then self:wipeSealed() else self:armSeal() end
+    end)
+end
+
+-- The seal closed by the idle timer: the reply on screen belongs to the open seal -- gone at once, no dissolve. The
+-- first line of a clean page shows instead, unless the pen is on the page (the page being written is the owner's).
+-- An answer still on its way is the controller's to drop (Controller:finish: the seal changed while it was in flight)
+function Diary:wipeSealed()
+    local a = self.answer
+    if a then
+        self:cancel(a.task)
+        self.answer = nil
+        a.layer.bb:free()
+        local r = a.block.rect
+        self:renderRegion(r.x, r.y, r.w, r.h)
+    end
+    logger.info("riddle: seal idle, reply wiped")
+    if not (self.cur or self.page) then self:showInvitation(true) end
+    self:nextAnswer()
 end
 
 -- the sleep caught the reply being revealed: the rest of its glyphs go into the layer at once
@@ -1666,6 +1709,7 @@ function Diary:revealAnswer(text, top, unlocked, kind, release, page)
     local a = { block = block, layer = newLayer(block.rect), lvl = 0, i = 0, phase = "reveal", t0 = now(), kind = kind, release = release, page = page }
     self.answer = a
     if unlocked then self:scheduleFollowup() end
+    self:armSeal() -- a reply (or the key) may have moved the seal's idle deadline
     if self.test then self:testOnAnswer("reveal") end
     local function step()
         a.task = nil
@@ -1984,6 +2028,7 @@ function Diary:backToDiary()
     self:trayShow("back")
     self:push(0, 0, self.w, self.h, "full")
     if followup then self:scheduleFollowup() end
+    self:armSeal() -- the mode's resetPage dropped the idle timer
     self:maybeIdle()
 end
 

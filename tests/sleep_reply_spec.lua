@@ -63,10 +63,26 @@ local function count(needle)
   return n
 end
 
-local function diary(sealed)
-  clock, timeline, LOG, FREED = 0, {}, {}, 0
+local controller = require("riddle.controller")
+local stand = require("seal_stand")
+
+-- настенные часы контроллера (deps.now): идут с планировщиком, сон их уводит вперёд (slept), таймеры KOReader — нет
+local slept = 0
+local function wall() return 1000 + math.floor(clock) + slept end
+
+-- rules: nil — контроллера нет; false — печати нет; таблица — правила печати (cfg.seal). Контроллер настоящий,
+-- on_sleep помечает сон (ctl.slept) и делает своё
+local function diary(rules)
+  clock, timeline, LOG, FREED, slept = 0, {}, {}, 0, 0
   local ctl
-  if sealed ~= nil then ctl = { seal = { configured = sealed }, on_sleep = function(self) self.slept = true end } end
+  if rules ~= nil then
+    ctl = controller.new{ cfg = { seal = rules and stand.rules(rules) or stand.none() }, now = wall,
+                          random = function() return 1 end, log = nop }
+    ctl.on_sleep = function(self)
+      self.slept = true
+      return controller.on_sleep(self)
+    end
+  end
   local d = setmetatable({
     canvas = bb_stub, tasks = {}, queue = {}, inflight = 0, strokes = {}, epoch = 0, w = 758, h = 1024,
     prompt = { rect = { x = 0, y = 0, w = 0, h = 0 } },
@@ -153,13 +169,87 @@ function T.test_sleep_drops_unfinished_page_and_requests_but_not_the_reply()
 end
 
 function T.test_sealed_sleep_wipes_the_reply_and_shows_invitation()
-  local d, ctl = diary(true)
+  local d, ctl = diary({ key = true, on_sleep = true })
+  ctl:seal_toggle() -- ключ узнан: печать открыта
   arrive(d, "Я помню")
   run(60)
   sleep_and_wake(d)
-  t.eq(d.answer, nil, "с печатью страница чистая")
+  t.eq(d.answer, nil, "сон закрывает печать — страница чистая")
   t.eq(count("SHOWN invitation"), 1, "и приглашение")
-  t.ok(ctl.slept)
+  t.ok(not ctl.seal_open)
+end
+
+-- печать есть, но сон её не закрывает (on_sleep нет, spec §6): реплика переживает сон, как без печати
+function T.test_sleep_keeps_reply_when_sleep_does_not_close()
+  local d, ctl = diary({ key = true, minutes = 30 })
+  ctl:seal_toggle()
+  arrive(d, "Я помню")
+  run(60)
+  slept = 600 -- десять минут сна: простой не истёк
+  sleep_and_wake(d)
+  t.ok(d.answer and d.answer.phase == "hold", "реплика стоит после пробуждения")
+  t.eq(count("SHOWN invitation"), 0)
+  t.ok(ctl.seal_open)
+end
+
+-- таймеры KOReader во сне не идут: пробуждение само проверяет простой — истёк, печать закрыта, на экране первая
+-- строка чистой страницы
+function T.test_resume_checks_idle()
+  local d, ctl = diary({ key = true, minutes = 30 })
+  ctl:seal_toggle()
+  arrive(d, "Я помню")
+  run(60)
+  slept = 2 * 3600
+  d:onSuspend()
+  d:onResume()
+  -- сразу, до первого тика: реплика не должна попасть в перерисовку после заставки
+  t.ok(not ctl.seal_open, "простой во сне закрыл печать")
+  t.eq(d.answer, nil, "реплика открытой печати стёрта")
+  t.eq(#d.painted, 0, "реплика не вернулась на холст")
+  t.eq(count("SHOWN invitation"), 1, "первая строка чистой страницы")
+  run(1)
+  t.eq(count("SHOWN invitation"), 1, "одна")
+end
+
+-- таймер простоя после ответа: N минут без записи — печать закрыта, ответ стёрт, на экране первая строка
+function T.test_idle_timer_wipes_the_reply()
+  local d, ctl = diary({ key = true, minutes = 30 })
+  ctl:seal_toggle()
+  arrive(d, "Я помню")
+  run(1799 - clock)
+  t.ok(ctl.seal_open, "до срока открыта")
+  t.ok(d.answer, "ответ стоит")
+  run(2)
+  t.ok(not ctl.seal_open, "через 30 минут без записи закрыта")
+  t.eq(d.answer, nil, "ответ стёрт")
+  t.eq(FREED, 1, "слой ответа освобождён")
+  t.eq(count("SHOWN invitation"), 1, "первая строка чистой страницы")
+end
+
+-- часы прыгнули назад (Review Focus 3): таймер сработал, а простой по часам не истёк — печать открыта, таймер
+-- взведён заново на остаток
+function T.test_idle_timer_rearms_after_clock_back()
+  local d, ctl = diary({ key = true, minutes = 30 })
+  ctl:seal_toggle()
+  arrive(d, "Я помню")
+  run(100)
+  slept = -600 -- часы назад на 10 минут
+  run(1800 - clock + 1)
+  t.ok(ctl.seal_open, "раньше срока не закрыта")
+  t.ok(d.answer, "ответ стоит")
+  run(1800)
+  t.ok(not ctl.seal_open, "по новому отсчёту закрыта")
+  t.eq(d.answer, nil)
+end
+
+-- печати без minutes таймер не нужен: ответ стоит сколько угодно
+function T.test_no_idle_timer_without_minutes()
+  local d, ctl = diary({ key = true })
+  ctl:seal_toggle()
+  arrive(d, "Я помню")
+  run(10 * 3600)
+  t.ok(ctl.seal_open)
+  t.ok(d.answer)
 end
 
 function T.test_no_controller_counts_as_no_seal()
