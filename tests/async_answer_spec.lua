@@ -3113,6 +3113,9 @@ local function kept_diary()
   d.controller.map = function() return m end
   local clk = { s = os.time({ year = 2026, month = 11, day = 16, hour = 12, min = 0 }) }
   d.map_clock = function() return os.date("*t", clk.s) end
+  -- номер открытия (seed расстановки) стартует от настоящих часов (Diary.openMap): без фиксации расстановка героев
+  -- плавает от прогона к прогону. Стенд ставит своё число
+  Diary.map_opens = 1000
   return d, clk
 end
 
@@ -3243,13 +3246,34 @@ end
 function T.test_far_move_then_close_keeps_new_terrain()
   local d, clk = kept_diary()
   local _, old_heroes = open_and_walk(d)
+  -- новая местность — другой городок: дома и улицы сдвинуты, расстановка на нём не совпадает со старой
   local NEW = town()
   NEW.center = { lat = 1.05, lon = 2 }
+  for _, b in ipairs(NEW.buildings) do
+    for i = 1, #b.pts, 2 do b.pts[i], b.pts[i + 1] = b.pts[i] + 90, b.pts[i + 1] - 60 end
+  end
+  for _, st in ipairs(NEW.streets) do
+    st[1], st[2], st[3], st[4] = st[1] + 90, st[2] - 60, st[3] + 90, st[4] - 60
+  end
   d.point, d.terrain = { lat = 1.05, lon = 2, source = "wifi", acc = 30, ts = 2 }, NEW
   d.runner:done({ point_source = "wifi", acc = 30, aps = 5, write = "ok", terrain = { state = "fetched", ways = 5 } })
   t.eq(d.map.terrain, NEW)
   run(5)
   t.ok(d.map.cast_for == NEW and heroes_of(d) ~= old_heroes, "far: герои новой местности")
+  -- места не сверяются с прежними (стоящие на месте герои совпали бы при любой местности того же вида): стоящие —
+  -- ровно там, где их ставит riddle.cast.place на новой местности; шагавшие ушли с места, их не сверяем
+  local v, names, rows = d.map, {}, {}
+  for _, h in ipairs(v:heroes()) do names[h.name] = h end
+  for _, c in ipairs(v.data.cast) do if names[c.name] then rows[#rows + 1] = c end end
+  local want, standing = require("riddle.cast").place(rows, NEW, d.map_clock(), v.seed, v:heroScreen(), true), 0
+  for _, w in ipairs(want) do
+    local h = names[w.name]
+    if #(h.trail or {}) == 0 then
+      standing = standing + 1
+      t.ok(h.x == w.x and h.y == w.y, "far: " .. w.name .. " стоит на месте новой местности")
+    end
+  end
+  t.ok(standing >= 1, "far: есть стоящие герои для сверки")
   local new_heroes = names_of(d)
   d:closeMap("rose")
   clk.s = clk.s + 60
