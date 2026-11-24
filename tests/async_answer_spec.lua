@@ -91,9 +91,9 @@ local function fake_runner()
   return r
 end
 
--- rules — правила печати (по умолчанию — по ключу)
-local function ctl(rules)
-  return controller.new{
+-- rules — правила печати (по умолчанию — по ключу); extra — свои deps поверх
+local function ctl(rules, extra)
+  local deps = {
     cfg = { seal = rules or stand.key() },
     memory = nil,
     read_file = function() return "PNG" end,
@@ -106,6 +106,16 @@ local function ctl(rules)
     remote_fn = function() return function() return {} end end,
     absorb = function(payload) return payload.result, payload.err end,
   }
+  for k, v in pairs(extra or {}) do deps[k] = v end
+  return controller.new(deps)
+end
+
+-- контроллер с образцом ключа (stand.load_key): страница-ключ сдвигает печать. Только тестам ключа — образец из роз
+-- владельца, и с ним роза карты стала бы ключом
+local function keyed(rules, extra)
+  extra = extra or {}
+  extra.load_key = stand.load_key
+  return ctl(rules, extra)
 end
 
 local function reply(read, text) return { result = { read = read, reply = text } } end
@@ -139,6 +149,11 @@ end
 local function page_done(d, strokes)
   d.page = { strokes = strokes or {}, ink = { 10, 200, 100, 260 } }
   d:onPageDone()
+end
+
+-- страница-ключ (настоящий key_page): печать сдвигается без модели, фраза — на место страницы в очереди
+local function key_page(d)
+  page_done(d, stand.key_strokes(Diary.CFG.dissolve.steps))
 end
 
 local T = {}
@@ -322,11 +337,11 @@ end
 
 function T.test_async_unlock_schedules_followup()
   local d = diary()
-  stand.next_page_is_key(d.controller)
-  page_done(d)
-  d.runner:done(reply("?", ""))
+  d.controller = keyed()
+  key_page(d)
   t.ok(d.controller.seal_open)
   t.ok(in_list(texts.welcomes, d.revealed[1]), tostring(d.revealed[1]))
+  t.eq(#d.runner.jobs, 0, "ключ модель не зовёт")
   t.ok(d.followup_task, "после приветствия запланирован пересказ")
 end
 
@@ -342,14 +357,13 @@ end
 
 function T.test_async_followup_summary_goes_to_runner()
   local d = diary()
+  d.controller = keyed()
   local saved = {}
   d.controller.deps.memory = summary_memory(saved)
-  stand.next_page_is_key(d.controller)
-  page_done(d)
-  d.runner:done(reply("?", ""))
+  key_page(d)
   run(120)
   local job = d.runner.jobs[#d.runner.jobs]
-  t.eq(#d.runner.jobs, 2, "ответ и пересказ")
+  t.eq(#d.runner.jobs, 1, "пересказ — единственный запрос: ключ модель не зовёт")
   t.eq(job.kind, "summary", "пересказ ушёл в runner")
   t.ok(job.opts.timeout_s > 0, "у пересказа свой потолок")
   t.eq(#saved, 0, "разблокировка не ждёт пересказа")
@@ -383,22 +397,21 @@ end
 
 function T.test_async_roll_goes_to_runner()
   local d = diary()
+  d.controller = keyed()
   local state, rolled = { total = 0 }, {}
   d.controller.deps.memory = roll_memory(state, rolled)
-  stand.next_page_is_key(d.controller)
-  page_done(d)
-  d.runner:done(reply("?", ""))
+  key_page(d)
   run(120)
-  t.eq(#d.runner.jobs, 1, "после разблокировки сворачивать нечего")
+  t.eq(#d.runner.jobs, 0, "после разблокировки сворачивать нечего")
   state.total = 40
   page_done(d)
   d.runner:done(reply("запись", "ответ"))
   run(120)
   local job = d.runner.jobs[#d.runner.jobs]
-  t.eq(#d.runner.jobs, 3, "ответ, ответ, свёртка")
+  t.eq(#d.runner.jobs, 2, "ответ, свёртка")
   t.eq(job.kind, "summary", "свёртка ушла в runner хвостом")
   t.eq(count("seal open (roll)"), 1, "хвост свёртки в логе — не разблокировка: " .. table.concat(LOG, "\n"))
-  t.eq(count("(unlocked)"), 1, "разблокировка — одна, первая страница")
+  t.eq(count("(unlocked)"), 0, "разблокировка — страница-ключ, не ответ")
   t.ok(job.opts.timeout_s > 0, "у свёртки потолок дочернего")
   t.eq(#rolled, 0, "ответ не ждёт свёртки")
   d.runner:done({ result = { text = "С" } })
@@ -411,14 +424,13 @@ end
 -- runner занят (чтение Notion, ответ): пересказ ждёт, пока освободится, и не отменяет чужую задачу
 function T.test_async_followup_waits_for_busy_runner()
   local d = diary()
+  d.controller = keyed()
   local saved = {}
   d.controller.deps.memory = summary_memory(saved)
-  stand.next_page_is_key(d.controller)
-  page_done(d)
-  d.runner:done(reply("?", ""))
+  key_page(d)
   d.runner.cur = { kind = "sync" }
   run(120)
-  t.eq(#d.runner.jobs, 1, "пока runner занят, пересказ не стартует")
+  t.eq(#d.runner.jobs, 0, "пока runner занят, пересказ не стартует")
   t.eq(#d.runner.cancels, 0, "чужую задачу не отменяет")
   d.runner.cur = nil
   run(5)
@@ -428,11 +440,10 @@ end
 -- таймаут или вытеснение ответом — пересказ не сохраняется
 function T.test_async_followup_failure_not_saved()
   local d = diary()
+  d.controller = keyed()
   local saved = {}
   d.controller.deps.memory = summary_memory(saved)
-  stand.next_page_is_key(d.controller)
-  page_done(d)
-  d.runner:done(reply("?", ""))
+  key_page(d)
   run(120)
   d.runner:done(nil, "cancelled")
   t.eq(#saved, 0)
@@ -487,9 +498,7 @@ end
 
 -- разблокировка через настоящий runner, пока пересказ не ушёл в дочерний -> pid пересказа
 local function unlock_until_summary(d, sys)
-  stand.next_page_is_key(d.controller)
-  page_done(d)
-  sys.reply(#sys.procs, reply("?", ""))
+  key_page(d)
   for _ = 1, 60 do
     if d.runner:busy() == "summary" then return #sys.procs end
     run(1)
@@ -499,7 +508,7 @@ end
 
 local function summary_diary()
   local d = wired()
-  d.controller = ctl(stand.rules({ key = true, on_sleep = true })) -- сон закрывает печать
+  d.controller = keyed(stand.rules({ key = true, on_sleep = true })) -- сон закрывает печать
   local saved = {}
   d.controller.deps.memory = summary_memory(saved)
   local sys
@@ -708,6 +717,7 @@ local function gen_diary(whose, ask)
     llm_call = function() error("синхронный путь не должен вызываться") end,
     remote_fn = function() return function() return {} end end,
     absorb = function(payload) return payload.result, payload.err end,
+    load_key = stand.load_key,
   }
   -- строка уже разобрана (state = "ready"): генерация начинается с раздела persona
   local line = whose or "Гермиона Грейнджер"
@@ -1003,7 +1013,7 @@ local CASES = {
   { "sleepy", nil, function(d) d:respond(nil, function(text) d.revealed[#d.revealed + 1] = text end) end },
   { "greetings", nil, function(d) d.revealed[1] = d:invitationText() end },
   { "welcomes", true, function(d)
-    stand.next_page_is_key(d.controller); page_done(d); d.runner:done(reply("?", "")); run(120)
+    key_page(d); run(120)
   end },
   { "unreadable", nil, function(d) page_done(d); d.runner:done(reply("?", "")); run(120) end },
   { "unreadable", true, function(d) page_done(d); d.runner:done(reply("?", "")); run(120) end },
@@ -1795,19 +1805,17 @@ end
 
 function T.test_no_followup_while_map_open()
   local d = map_diary()
-  d.controller.seal.open = false
+  d.controller = keyed() -- печать закрыта, ключ её откроет
   d.controller.deps.memory = summary_memory({})
-  stand.next_page_is_key(d.controller)
-  page_done(d)
-  d.runner:done(reply("?", ""))
+  key_page(d)
   t.ok(d.followup_task, "хвост назначен до карты")
   d:openMap("rose")
   run(120)
-  t.eq(#d.runner.jobs, 1, "пока карта открыта, хвост не стартует")
+  t.eq(#d.runner.jobs, 0, "пока карта открыта, хвост не стартует")
   d:closeMap("rose")
   run(120)
-  t.eq(#d.runner.jobs, 2, "карта закрыта: хвост ушёл")
-  t.eq(d.runner.jobs[2].kind, "summary")
+  t.eq(#d.runner.jobs, 1, "карта закрыта: хвост ушёл")
+  t.eq(d.runner.jobs[1].kind, "summary")
 end
 
 -- срез 4: точка карты. Пергамент рисуется сразу; надпись blind — пока точки нет

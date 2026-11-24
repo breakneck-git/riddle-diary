@@ -1,5 +1,6 @@
--- Печать для тестовых стендов: правила — как их отдаёт config.load (cfg.seal), и страница-ключ.
+-- Печать для тестовых стендов: правила — как их отдаёт config.load (cfg.seal), образец ключа и страница-ключ.
 local config = require("riddle.config")
+local O = require("fixtures.rose_owner")
 
 local M = {}
 
@@ -12,13 +13,15 @@ function M.none() return config.parse_seal(nil) end
 -- свои правила
 function M.rules(raw) return config.parse_seal(raw) end
 
--- следующая отвеченная страница — ключ: ответ на неё — seal_toggle (как у key_page, задача 6), ответ модели не
--- показывается. Распознаватель рисунка в стенде не нужен — важно, что страница открыла или закрыла печать
-function M.next_page_is_key(ctl)
-  ctl._answer = function(self)
-    rawset(self, "_answer", nil)
-    return self:seal_toggle()
-  end
+-- образец ключа на устройстве (deps.load_key контроллера): две розы владельца
+function M.load_key() return { O.owner_01, O.owner_02 } end
+
+-- страница-ключ — третья роза владельца: key_page узнаёт её по образцу load_key. lvl — уровень растворения штрихов
+-- (виджет: Diary.CFG.dissolve.steps — чернила уже растворились, фраза ключа не ждёт их)
+function M.key_strokes(lvl)
+  local out = {}
+  for i, s in ipairs(O.owner_03) do out[i] = { p = s.p, lvl = lvl } end
+  return out
 end
 
 return M

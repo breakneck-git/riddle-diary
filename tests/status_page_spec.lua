@@ -383,7 +383,7 @@ end
 
 -- пока страница открыта, синхронизация (on_idle) и хвост не стартуют: экран и раннер — у страницы
 function T.test_no_idle_or_followup_while_status_open()
-  local d = diary()
+  local d = diary({ load_key = stand.load_key })
   local idles = 0
   d.on_idle = function() idles = idles + 1 end
   d.controller.deps.memory = {
@@ -391,9 +391,7 @@ function T.test_no_idle_or_followup_while_status_open()
     entries = function() return { { role = "owner", text = "запись" }, { role = "diary", text = "ответ" } } end,
     set_summary = nop,
   }
-  stand.next_page_is_key(d.controller)
-  page_done(d)
-  d.runner:done(reply("?", ""))
+  page_done(d, stand.key_strokes(Diary.CFG.dissolve.steps)) -- страница-ключ: печать открыта без модели
   t.ok(d.followup_task, "хвост назначен до страницы")
   idles = 0
   d:openStatus("triangle")
