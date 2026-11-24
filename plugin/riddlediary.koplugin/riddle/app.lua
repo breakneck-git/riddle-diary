@@ -427,6 +427,14 @@ local function remove(path)
   if not ok then error(err) end
 end
 
+-- образец ключа в тестовом режиме devtest (testmode с seal=): отдельный файл, ключ владельца тест не видит и не пишет
+app.TEST_KEY_PATH = "/mnt/us/riddle/test/seal_key.lua"
+
+-- строка testmode (текст файла) -> app.TEST_KEY_PATH, если это режим seal=; иначе nil (образец — seal.KEY_PATH)
+function app.test_key_path(testmode)
+  return testmode and testmode:match("seal=[%w_,]+") and app.TEST_KEY_PATH or nil
+end
+
 -- d: cfg, memory, http, clock (монотонные с), wall (os.time), log, file_mtime;
 -- необязательно: read_file, remove, random, b64, lore_path, devmode (текст read и сырые поля ответа — в лог),
 -- knowledge_path (знание из Notion, по умолчанию knowledge.PATH), key_path (образец ключа печати, по умолчанию

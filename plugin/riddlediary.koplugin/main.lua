@@ -31,6 +31,21 @@ local function flag_present(name)
     return true
 end
 
+-- the sample of the seal key under devtest "seal=": its own file, the owner's key stays out of the test (app.test_key_path).
+-- Read at the controller's build; the testmode file is still there then (the widget's maybeStartTest removes it later).
+-- Only on a dev device: devtest is not loaded elsewhere, a stray testmode must not move the owner's key
+local function testKeyPath()
+    if not flag_present("devmode") then return nil end
+    local f = io.open(RIDDLE_DIR .. "/testmode", "r")
+    if not f then return nil end
+    local s = f:read("*a") or ""
+    f:close()
+    local app = require("riddle.app")
+    local path = app.test_key_path(s)
+    if path then os.execute('mkdir -p "' .. path:match("^(.*)/[^/]+$") .. '"') end
+    return path
+end
+
 -- Survives FileManager <-> ReaderUI switches (plugins are re-instantiated, modules are not).
 local state = package.loaded["riddlediary/state"] or {}
 package.loaded["riddlediary/state"] = state
@@ -68,6 +83,7 @@ local function getController()
         state.controller = app.new_controller{
             cfg = cfg,
             devmode = flag_present("devmode"),
+            key_path = testKeyPath(),
             memory = mem,
             http = http,
             clock = monotonic_s,

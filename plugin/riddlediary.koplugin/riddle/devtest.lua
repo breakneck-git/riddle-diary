@@ -22,6 +22,11 @@
 -- страницы → через 5 с касание пером → ждём закрытия → пауза. Печать любая (треугольник — не сообщение модели). Строки
 -- "riddle: TRIANGLE cycle i open=<мс>" и "… cycle i close=<мс>" (мс от подъёма пера; -1 — не дождались за 30 с; при
 -- промахе открытия одна строка "open=-1 close=-1") и итог "riddle: TRIANGLE n=N opened=K closed=M".
+-- Знак печати без пера: "seal=A,B,A,A2,triangle,tiny" — список фигур через запятую, каждая — одна страница пером (через
+-- feedEvent), после каждой ждём ответа. A — знак 1 штрих (Z), A2 — тот же с дрожанием (совпадает с A), B — другой знак
+-- (N), tiny — мелкий (меньше glyph.SIZE, но не случайное касание), triangle — треугольник. Образец ключа в этом режиме
+-- лежит отдельно: /mnt/us/riddle/test/seal_key.lua (app.test_key_path), ключ владельца не трогается. В лог на каждую
+-- страницу "riddle: devtest seal page <имя> -> <первые слова фразы | nil>" (штрихов и PNG в логе нет).
 -- new=1 — перед первым образцом начинается новая сессия разговора, как после паузы > 4 ч (память
 -- видит «сейчас» на 5 ч позже последней записи); история прошлой сессии цела, но в recent не идёт.
 
@@ -136,6 +141,46 @@ function devtest.triangleStrokes()
     return { { p = p } }
 end
 
+-- seal=<names>: the names of the pages, comma separated -> list | nil (no seal= in the line)
+function devtest.parseSeal(s)
+    local list = s:match("seal=([%w_,]+)")
+    if not list then return nil end
+    local out = {}
+    for name in list:gmatch("[^,]+") do out[#out + 1] = name end
+    return out
+end
+
+-- a polyline through the corners V (every ~6 px a point, a deterministic wobble of amp px instead of math.random)
+local function line(V, amp, phase)
+    local function wob(i, a) return math.floor(a * math.sin(i * 1.7 + phase) + 0.5) end
+    local p = {}
+    for k = 1, #V - 1 do
+        local a, b = V[k], V[k + 1]
+        local m = math.max(2, math.floor(math.max(math.abs(b[1] - a[1]), math.abs(b[2] - a[2])) / 6))
+        for i = (k == 1) and 0 or 1, m do
+            p[#p + 1] = math.floor(a[1] + (b[1] - a[1]) * i / m + wob(i + k, amp) + 0.5)
+            p[#p + 1] = math.floor(a[2] + (b[2] - a[2]) * i / m + wob(i + k + 9, amp) + 0.5)
+        end
+    end
+    return p
+end
+
+-- the pages of "seal=": own synthetic signs, one stroke each, not a triangle and not a rose; the tests check what the
+-- checklist expects of them (tests/devtest_seal_spec.lua). A and A2 are one sign drawn twice (glyph.match), B another;
+-- tiny is under glyph.SIZE but no accidental touch (png.tiny); triangle is the status page's own. nil — no such name
+local SEAL_FIGURES = {
+    A = function() return { { p = line({ { 230, 340 }, { 540, 340 }, { 230, 620 }, { 540, 620 } }, 2, 0) } } end,
+    A2 = function() return { { p = line({ { 236, 335 }, { 534, 345 }, { 226, 626 }, { 546, 615 } }, 4, 2) } } end,
+    B = function() return { { p = line({ { 230, 620 }, { 230, 340 }, { 540, 620 }, { 540, 340 } }, 2, 1) } } end,
+    tiny = function() return { { p = line({ { 330, 500 }, { 430, 500 }, { 330, 590 }, { 430, 590 } }, 1, 0) } } end,
+    triangle = function() return devtest.triangleStrokes() end,
+}
+
+function devtest.sealFigure(name)
+    local make = SEAL_FIGURES[name]
+    return make and make() or nil
+end
+
 -- a touch of the pen: one point (on the status page it closes it, no ink)
 function devtest.touchStrokes()
     return { { p = { 380, 500 } } }
@@ -177,6 +222,9 @@ function devtest.install(Diary, h)
     local revealAnswer = Diary.revealAnswer
     function Diary:revealAnswer(text, top, unlocked, kind, ...)
         logger.info("riddle: TEST answer text:", text, unlocked and "(unlocked)" or "")
+        -- seal=: the first phrase of the page being drawn (not the thinking phrase, the refusal, the interjection)
+        local run = self.seal_run
+        if run and not run.phrase and kind ~= "think" and kind ~= "busy" and kind ~= "interject" then run.phrase = text end
         return revealAnswer(self, text, top, unlocked, kind, ...)
     end
 
@@ -242,6 +290,10 @@ function devtest.install(Diary, h)
         end
         if devtest.parseTriangle(s) then
             self:testTriangle(s)
+            return
+        end
+        if devtest.parseSeal(s) then
+            self:testSeal(s)
             return
         end
         if not s:match("cycles=%d+") then return end
@@ -679,6 +731,93 @@ function devtest.install(Diary, h)
             is_open = function() return self.status ~= nil end,
             close = function() self:closeStatus("devtest") end,
         })
+    end
+
+    -- seal=<names>: the pages of the checklist, one pen page per name. A page is over when its phrase is on screen (or
+    -- the status page opened -- it is closed by a touch's way: closeStatus), a quiet page (tiny: nobody answers it) --
+    -- after SEAL_QUIET_S. A phrase that never comes is logged as nil after ROSE_WAIT_S. Names are checked before the
+    -- first stroke: a typo draws nothing. Sleep aborts the run, as in runSignRounds
+    local SEAL_QUIET_S, SEAL_PAUSE_S = 8, 3
+    function Diary:testSeal(s)
+        local names = devtest.parseSeal(s)
+        for _, name in ipairs(names) do
+            if not devtest.sealFigure(name) then
+                logger.err("riddle: devtest seal unknown page " .. name .. " - aborted, nothing was drawn")
+                return
+            end
+        end
+        local run = {}
+        self.seal_run = run
+        local slept0 = self.slept or 0
+        local function awake() return (self.slept or 0) == slept0 end
+        local i, dead = 0, false
+        local function over(note)
+            dead = true
+            self.seal_run = nil
+            logger.info(string.format("riddle: devtest seal %s pages=%d", note, i))
+        end
+        -- poll until want() holds or limit_s passes -> cb(held)
+        local function waitUntil(want, limit_s, cb)
+            local waited = 0
+            local function poll()
+                if want() then return cb(true) end
+                if waited >= limit_s then return cb(false) end
+                waited = waited + 0.25
+                self:roseSchedule(0.25, poll)
+            end
+            poll()
+        end
+        local function words(text)
+            local out = {}
+            for w in text:gmatch("%S+") do
+                out[#out + 1] = w
+                if #out == 5 then break end
+            end
+            return table.concat(out, " ")
+        end
+        local function page()
+            if dead then return end
+            if self.cur then -- a real finger is writing: never write under it
+                self:roseSchedule(1, page)
+                return
+            end
+            if not awake() then return over("aborted (sleep)") end
+            i = i + 1
+            if i > #names then
+                i = #names
+                return over("done")
+            end
+            local name = names[i]
+            run.phrase = nil
+            local points = toPoints(devtest.sealFigure(name))
+            local feed_s = 5
+            for _, st in ipairs(points) do feed_s = feed_s + #st * 0.012 * 1.5 + 0.15 end
+            local finished = false
+            local function logged()
+                logger.info(string.format("riddle: devtest seal page %s -> %s", name, run.phrase and words(run.phrase) or "nil"))
+                self:roseSchedule(SEAL_PAUSE_S, page)
+            end
+            -- the phrase is on screen (or the page was a sign): wait for the reveal to end, close what opened
+            local function settled()
+                if self.status then self:closeStatus("devtest") end
+                waitUntil(function() return not (self.answer and self.answer.phase == "reveal") end, ROSE_WAIT_S, logged)
+            end
+            self:feedStrokes(points, nil, function()
+                finished = true
+                if name == "tiny" then
+                    return self:roseSchedule(SEAL_QUIET_S, settled)
+                end
+                waitUntil(function() return run.phrase ~= nil or self.status ~= nil end, ROSE_WAIT_S, function()
+                    -- the page is over, the sign's mode needs its moment on screen before it is closed
+                    self:roseSchedule(self.status and ROSE_PAUSE_S or 0, settled)
+                end)
+            end, function() return not dead and awake() end, "SEAL")
+            self:roseSchedule(feed_s, function()
+                if not finished and not dead then over("aborted (feed lost)") end
+            end)
+        end
+        logger.info(string.format("riddle: devtest seal start pages=%d", #names))
+        self:roseSchedule(2, page)
     end
 
 end
