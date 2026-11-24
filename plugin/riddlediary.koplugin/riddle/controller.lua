@@ -149,7 +149,11 @@ function Controller:key_page(strokes)
     return texts.key_retry
   end
   local drawings = { first, strokes }
-  local ok, err = self.deps.write_key(self.key_path, seal.encode(drawings))
+  -- образец, который формат не прочтёт обратно (координата в записи с экспонентой), не пишется: на перезапуске он
+  -- был бы «битым», и печать не открылась бы ничем
+  local s = seal.encode(drawings)
+  local ok, err
+  if seal.decode(s) then ok, err = self.deps.write_key(self.key_path, s) else ok, err = nil, "encode" end
   if not ok then
     self:_log("riddle: seal key write failed: " .. tostring(err))
     return texts.key_retry
@@ -1180,19 +1184,20 @@ end
 -- синхронном пути (on_page) повода для хвоста нет; страница разблокировки реплик не пишет
 -- -> текст | nil, действие ("map": страница открыла карту, или страница на карте её закрыла)
 -- Печать сдвинулась, пока ответ был в пути (ключ, задача 6; Review Focus 1): ответ разговора (mode "open") собран
--- при другой печати — не показывается и не пишется (nil); payload всё же уходит в цепочку (deps.absorb: логи, мёртвые
--- ключи). Задания разбора строки и карты — как всегда
+-- при другой печати — не показывается (nil, действие тоже). Разбор идёт как всегда: запись ложится в память по
+-- решению начала страницы (job.write) — чернила растворились, память — единственная копия. Сдвиг считается до
+-- разбора: печать, сдвинутая в пути, а не самим ответом
 function Controller:finish(job, payload, err)
-  if job.mode == "open" and job.epoch ~= nil and job.epoch ~= self.seal_epoch then
-    if payload ~= nil then pcall(self.deps.absorb, payload) end
-    self:_log("riddle: answer dropped, seal changed")
-    return nil
-  end
+  local stale = job.mode == "open" and job.epoch ~= nil and job.epoch ~= self.seal_epoch
   local text, action = self:_safe_answer(job, function()
     if payload == nil then return nil, err end
     return self.deps.absorb(payload)
   end)
   if job.answered and job.sid and self:_roll_total(job.sid) then self.roll_due = true end
+  if stale then
+    self:_log("riddle: answer dropped, seal changed")
+    return nil
+  end
   return text, action
 end
 

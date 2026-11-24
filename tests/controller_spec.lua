@@ -388,8 +388,9 @@ function T.test_wrong_figure_is_normal_page()
   t.ok(not env.ctrl.seal_open)
 end
 
--- Review Focus 1: ответ, собранный при открытой печати, пришёл после закрытия ключом — не показывается и не
--- пишется; в лог — только факт
+-- Review Focus 1: ответ, собранный при открытой печати, пришёл после закрытия ключом — не показывается; в память
+-- запись ложится, как решено в начале страницы (job.write): чернила растворились, память — единственная копия.
+-- В лог — только факт
 function T.test_answer_in_flight_dropped_on_close()
   local env = keyed()
   env.ctrl:key_page(O.owner_03)
@@ -399,7 +400,8 @@ function T.test_answer_in_flight_dropped_on_close()
   t.eq(env.ctrl:key_page(O.owner_04), texts.seal_closed)
   local adds = #env.memory.adds
   t.eq(env.ctrl:finish(job, job.run()), nil, "ответ после закрытия не показывается")
-  t.eq(#env.memory.adds, adds, "и не пишется в память")
+  t.eq(#env.memory.adds, adds + 2, "запись и ответ легли в память")
+  t.eq(#env.ctrl.closed_turns, 0, "реплика открытой печати — не в связности закрытой")
   t.ok(logged(env, "riddle: answer dropped, seal changed"), table.concat(env.logs, "\n"))
   for _, l in ipairs(env.logs) do t.ok(not has(l, "СЕКРЕТ"), "текста ответа в логе нет: " .. l) end
   -- печать не сдвигалась — ответ показывается, как всегда
@@ -408,8 +410,13 @@ function T.test_answer_in_flight_dropped_on_close()
   t.eq(env.ctrl:finish(job2, job2.run()), "Ответ.")
 end
 
--- и обратно: ответ закрытой печати, пришедший после открытия, — не реплика открытого разговора
+-- и обратно: ответ закрытой печати, пришедший после открытия, не показывается; запись (remember = true) ложится
+-- в память так же, как легла бы без ключа, а в связность закрытой печати — нет: она уже сброшена открытием
 function T.test_closed_answer_dropped_on_open()
+  local plain = keyed()
+  plain:say("кто ты", "Мои страницы молчат…")
+  local pjob = plain.ctrl:begin(PNG)
+  t.eq(plain.ctrl:finish(pjob, pjob.run()), "Мои страницы молчат…")
   local env = keyed()
   env:say("кто ты", "Мои страницы молчат…")
   local job = env.ctrl:begin(PNG)
@@ -417,6 +424,11 @@ function T.test_closed_answer_dropped_on_open()
   env.ctrl:key_page(O.owner_03)
   t.ok(env.ctrl.seal_open)
   t.eq(env.ctrl:finish(job, job.run()), nil)
+  t.eq(#plain.memory.adds, 2, "без ключа запись легла")
+  t.eq(#env.memory.adds, #plain.memory.adds, "с ключом — так же")
+  for i, a in ipairs(plain.memory.adds) do
+    t.eq(env.memory.adds[i].role .. ":" .. env.memory.adds[i].text, a.role .. ":" .. a.text)
+  end
   t.eq(#env.ctrl.closed_turns, 0, "реплика закрытой печати не легла в связность после открытия")
 end
 

@@ -223,6 +223,20 @@ function T.test_write_failure_keeps_setting()
   t.eq(env.ctl:key_page(SQUARE), texts.key_again, "режим заново: следующий рисунок — первый")
 end
 
+-- рисунок, который формат образца не прочтёт обратно (координата 1e-07 -> "1e-07"), не пишется: иначе записанный
+-- образец на перезапуске оказался бы «битым» и печать не открылась бы ничем
+function T.test_unreadable_encoding_not_written()
+  local env = make()
+  local first = { { p = { 1e-07, 0, 350, 0, 350, 350, 0, 350, 0, 0 } } }
+  local second = { { p = { 0, 0, 350, 0, 350, 350, 0, 350, 0, 0 } } }
+  t.eq(env.ctl:key_page(first), texts.key_again)
+  t.eq(env.ctl:key_page(second), texts.key_retry)
+  t.eq(#env.writes, 0, "образец не записан")
+  t.eq(env.ctl.seal.setting, true, "режим задания остаётся")
+  t.eq(env.ctl.seal_open, false)
+  t.ok(logged(env, "riddle: seal key write failed: encode"), table.concat(env.logs, "\n"))
+end
+
 -- §9, решение владельца «А»: пока стоит off, образец удаляется; печати нет
 function T.test_off_deletes_key_file_fake()
   local env = make(stand.rules({ key = true, off = true }), { [KEY] = seal.encode({ SQUARE, SQUARE_AGAIN }) })
