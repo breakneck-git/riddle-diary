@@ -157,6 +157,16 @@ function T.test_closed_seal_log_names_answering_provider()
   t.ok(logged(env, 'riddle: open read "кто ты"') and logged(env, "via gemini"), table.concat(env.logs, "\n"))
 end
 
+-- закрытая печать без базы и строка конфига не «Методов» (ревью ui 4527af2): персону взять негде, но данные при
+-- закрытой не нужны — модель отвечает без персоны, а не падает на memory:persona_by_key
+function T.test_closed_seal_without_memory_answers_for_config_line()
+  local env = make({ gemini_key = "km", seal = stand.key(), whose = "Hermione Granger" })
+  env.script[1] = { body = resp({ read = "кто ты", reply = "Страницы закрыты." }) }
+  t.eq(env.ctrl:on_page(PNG), "Страницы закрыты.")
+  t.eq(#env.posts, 1, "модель вызвана")
+  t.ok(not logged(env, "on_page failed"), table.concat(env.logs, "\n"))
+end
+
 -- devmode доходит до контроллера через app.new_controller: без него текст read в лог не идёт
 function T.test_seal_log_without_devmode_hides_read_text()
   local env = make()

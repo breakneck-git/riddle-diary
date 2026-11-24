@@ -503,6 +503,92 @@ function T.test_closed_followup_no_lore_no_summary()
   t.eq(lore_reads, 1, "и лор")
 end
 
+-- имя владельца — тоже данные дневника: в память кладёт его фейк set_owner_name
+local function owner_names(env)
+  local names = {}
+  env.memory.set_owner_name = function(_, id, name)
+    names[#names + 1] = { id = id, name = name }
+    return true
+  end
+  return names
+end
+
+-- решение о записи принимается в начале страницы: начатая при закрытой печати с remember = false не ложится в
+-- память (ни реплики, ни имя), даже если печать открылась до ответа
+function T.test_write_decided_at_page_start()
+  local env = data_env({ seal = { key = true, remember = false } })
+  local names = owner_names(env)
+  env.script[1] = { read = "ЗАКРЫТАЯ-ЗАПИСЬ", reply = "ЗАКРЫТЫЙ-ОТВЕТ", name = "Гарри" }
+  local job = env.ctrl:begin(PNG)
+  env:unlock()
+  t.eq(env.ctrl:finish(job, job.run()), "ЗАКРЫТЫЙ-ОТВЕТ")
+  t.eq(#env.memory.adds, 0, "страница закрытой печати в память не легла")
+  t.eq(#names, 0, "и имя не записано")
+end
+
+-- реплика страницы, начатой при открытой печати, не идёт в связность закрытой, даже если печать закрылась до ответа:
+-- её запрос собран с данными
+function T.test_open_page_answered_after_close_not_in_closed_turns()
+  local env = data_env({ seal = { key = true, remember = false } })
+  env:unlock()
+  env:say("ОТКРЫТАЯ-ЗАПИСЬ", "ОТКРЫТЫЙ-ОТВЕТ")
+  local job = env.ctrl:begin(PNG)
+  env.ctrl:seal_toggle()
+  t.ok(not env.ctrl.seal_open, "печать закрыта до ответа")
+  t.eq(env.ctrl:finish(job, job.run()), "ОТКРЫТЫЙ-ОТВЕТ")
+  env:say("закрытая", "ответ"); env:page()
+  local s = json.encode(env.llm_calls[2].messages)
+  t.ok(is_closed_call(env.llm_calls[2]), "второй запрос — закрытой печати")
+  t.ok(not has(s, "ОТКРЫТАЯ-ЗАПИСЬ") and not has(s, "ОТКРЫТЫЙ-ОТВЕТ"), "реплика открытой — не в закрытом запросе")
+end
+
+-- лор — данные пользователя: страница при закрытой печати его не синхронизирует, даже когда хвост старта взведён
+function T.test_closed_page_does_not_sync_lore()
+  local env = data_env()
+  local read = env.ctrl.deps.read_file
+  local lore_reads = 0
+  env.ctrl.deps.read_file = function(path)
+    if path == LORE then lore_reads = lore_reads + 1 end
+    return read(path)
+  end
+  env.files[LORE] = "## Мир\nНОВЫЙ-ЛОР"
+  env.mtimes[LORE] = 777
+  env.ctrl.followup_due = true
+  env:say("кто ты", "ответ"); env:page()
+  t.eq(lore_reads, 0, "лор не читался")
+  t.eq(#env.memory.imported, 0, "лор не импортирован")
+  t.ok(not has(json.encode(env.llm_calls[1].messages), "НОВЫЙ-ЛОР"), "и в запрос не ушёл")
+end
+
+-- имя владельца при закрытой печати с remember = false не пишется; при открытой — пишется (стенд проверяет, что имя
+-- годное)
+function T.test_closed_remember_false_skips_owner_name()
+  local env = data_env({ seal = { key = true, remember = false } })
+  local names = owner_names(env)
+  env.script[1] = { read = "я Гарри", reply = "ответ", name = "Гарри" }
+  env:page()
+  t.eq(#names, 0, "при закрытой с remember = false имя не записано")
+  env:unlock()
+  env.script[1] = { read = "я Гарри", reply = "ответ", name = "Гарри" }
+  env:page()
+  t.eq(#names, 1, "при открытой — записано")
+  t.eq(names[1].name, "Гарри")
+end
+
+-- связность закрытой печати хранится в окне истории промпта (prompt.MAX_RECENT реплик): старые уходят, новые остаются
+function T.test_closed_turns_window_is_bounded()
+  t.eq(prompt.MAX_RECENT, 40, "окно истории промпта")
+  local env = data_env({ seal = { key = true, remember = false } })
+  local pages = prompt.MAX_RECENT -- реплик вдвое больше окна
+  for i = 1, pages do
+    env:say("ЗАПИСЬ-" .. i .. "-", "ОТВЕТ-" .. i .. "-"); env:page()
+  end
+  local turns = env.ctrl.closed_turns
+  t.eq(#turns, prompt.MAX_RECENT, "хранится не больше окна")
+  t.eq(turns[#turns].text, "ОТВЕТ-" .. pages .. "-", "последняя реплика — на месте")
+  t.eq(turns[1].text, "ЗАПИСЬ-" .. (pages - prompt.MAX_RECENT / 2 + 1) .. "-", "старые ушли")
+end
+
 -- открытая печать -----------------------------------------------------------
 
 function T.test_open_writes_memory()

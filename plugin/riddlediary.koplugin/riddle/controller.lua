@@ -124,14 +124,15 @@ function Controller:pick(list, used)
 end
 
 -- запись в память не должна терять ответ: ошибка логируется, текст всё равно уйдёт на экран.
+-- job — страница (_begin): её сессия (job.sid) и решение о записи (job.write).
 -- owner_marks, diary_marks — метки реплик (memory.add), nil — без меток. -> true, если метки пишущего легли
-function Controller:_remember(sid, read, reply, owner_marks, diary_marks)
-  if not self:_may_write() then return false end
+function Controller:_remember(job, read, reply, owner_marks, diary_marks)
+  if not job.write then return false end
   local saved
   local ok, err = pcall(function()
     local now = self.deps.now()
-    saved = self.deps.memory:add(sid, "owner", read, now, owner_marks)
-    self.deps.memory:add(sid, "diary", reply, now, diary_marks)
+    saved = self.deps.memory:add(job.sid, "owner", read, now, owner_marks)
+    self.deps.memory:add(job.sid, "diary", reply, now, diary_marks)
   end)
   if not ok then self:_log("riddle: memory write failed: " .. tostring(err)) end
   return ok and saved == true
@@ -305,7 +306,7 @@ function Controller:_use_memory()
   return false
 end
 
--- как дневник говорит о себе в служебных промптах (закрытая печать, пересказ, свёртка): «Методов» — METHODS_VIEW
+-- как дневник говорит о себе в служебных промптах (пересказ, свёртка): «Методов» — METHODS_VIEW
 -- (прежний текст), сгенерированная — свой вид, персонажа нет (вопрос «чей дневник», раздела persona ещё нет, сбой
 -- чтения) — persona.NONE_VIEW: на языке записи, о себе без рода
 function Controller:_self_view()
@@ -342,13 +343,14 @@ function Controller:owner_name()
   return row and memory:owner_name(row.id)
 end
 
--- как пишущий назвал себя в записи (ключ "name", prompt.NAME_FORMAT) -> строке персоны id; негодное (mapdata.owner) —
--- мимо, прежнее имя остаётся. В лог — только итог, без имени и без текста ошибки (в нём может быть имя)
-function Controller:_save_owner_name(id, name)
+-- как пишущий назвал себя в записи (ключ "name", prompt.NAME_FORMAT) -> строке персоны страницы (job.persona_id), если
+-- страница пишет в память (job.write); негодное (mapdata.owner) — мимо, прежнее имя остаётся. В лог — только итог, без
+-- имени и без текста ошибки (в нём может быть имя)
+function Controller:_save_owner_name(job, name)
   name = mapdata.owner(name)
-  if not (id and name and self:_may_write()) then return end
+  if not (job.persona_id and name and job.write) then return end
   local memory = self.deps.memory
-  local ok, saved = pcall(memory.set_owner_name, memory, id, name)
+  local ok, saved = pcall(memory.set_owner_name, memory, job.persona_id, name)
   self:_log((ok and saved) and "riddle: owner name saved" or "riddle: owner name save failed")
 end
 
@@ -571,7 +573,8 @@ function Controller:_data_ok()
 end
 
 -- сказанное на странице ложится в память дневника: база открыта, и печать открыта или правило remember (ответ
--- владельца 20.11: разговор при закрытой печати по умолчанию запоминается)
+-- владельца 20.11: разговор при закрытой печати по умолчанию запоминается). Спрашивает _begin — в начале страницы
+-- (job.write)
 function Controller:_may_write()
   return self.deps.memory ~= nil and (self:_data_ok() or self.seal.rules.remember == true)
 end
@@ -821,7 +824,10 @@ function Controller:_begin(png_path, with_run)
   -- строки нет: страница — ответ на «Чей это дневник?» (читается без образа и без памяти, _ask_answer)
   if self.saved_ask and self.saved_ask.failed then self.saved_ask = nil end -- сбой чтения — перечитать
   local asking = self:_asking()
-  if not asking then
+  -- база не открылась (main.lua), а строка не «Методов»: персону взять негде. Закрытой печати она не нужна — ответ
+  -- без персоны (prompt.open: прежний текст), без записи; открытой нужна память (фраза сбоя в pcall ниже)
+  local bare = not deps.memory and not self:_data_ok() and not self:_builtin()
+  if not (asking or bare) then
     ok, view, row, parts = pcall(self._current, self)
     if not ok then
       self:_log("riddle: on_page failed: " .. tostring(view))
@@ -843,6 +849,9 @@ function Controller:_begin(png_path, with_run)
       return nil, self:_pick(self:texts("fail_other"))
     end
   end
+  -- пишется ли сказанное на странице в память — решается сейчас, по печати в начале страницы: печать, сдвинувшаяся
+  -- до ответа, его не меняет (_answer читает job.write)
+  local write = self:_may_write()
   local job
   ok, job = pcall(function()
     if asking then
@@ -855,12 +864,13 @@ function Controller:_begin(png_path, with_run)
     end
     if setup then
       -- запись во время генерации: из ответа берётся только read (_answer)
-      return { mode = "setup", stage = "gen", sid = deps.memory:session(deps.now()), messages = prompt.setup(png_b64) }
+      return { mode = "setup", stage = "gen", sid = deps.memory:session(deps.now()), messages = prompt.setup(png_b64),
+        write = write }
     end
     -- закрытая печать — тот же ответ без данных: их не отдаёт _open_context (spec §4)
     local data = self:_data_ok()
     if data and self.followup_due then pcall(self._sync_lore, self) end -- лор — к ответам до начала хвоста
-    -- база не открылась (main.lua): закрытая печать отвечает и без неё, сессии нет; открытой нужна память
+    -- база не открылась: закрытая печать отвечает и без неё (bare выше), сессии нет; открытой нужна память
     local sid = deps.memory and deps.memory:session(deps.now())
     local t0 = deps.clock and deps.clock()
     local ctx, tasks_ctx = self:_open_context(sid, parts)
@@ -884,10 +894,11 @@ function Controller:_begin(png_path, with_run)
     -- job.watched — сверка советов в _answer, job.retry — повтор (в дочернем: замыкание создано до fork)
     -- job.map: запрос спрашивал о карте — только тогда "map":"open" в ответе действие (_answer).
     -- job.persona_id — чья запись: имя из ответа ложится этой персоне, даже если строка сменилась до ответа.
-    -- job.closed — запрос собран без данных: реплика идёт в связность закрытой печати (_answer)
+    -- job.closed — запрос собран без данных: реплика идёт в связность закрытой печати (_answer).
+    -- job.write — сказанное ложится в память (реплики и имя): решено по печати в начале страницы
     return { mode = "open", sid = sid, messages = messages, tasks = tasks_ctx, rhythm = rhythm_job,
       watched = watched, retry = picks_retry(messages, watched, untouched), map = ctx.map ~= nil,
-      persona_id = row and row.id, closed = not data or nil }
+      persona_id = row and row.id, closed = not data or nil, write = write }
   end)
   if ok and with_run then
     ok, job.run = pcall(deps.remote_fn, job.messages, true, job.retry and { retry = job.retry } or nil)
@@ -1011,11 +1022,11 @@ function Controller:_answer(job, result, err)
     -- переспрос о книге дел вместо ответа модели: напоминания в нём нет — и предложения нет
     local reply = self:_tasks_source(job.tasks, result.tasks_source)
     if reply then offer = nil else reply = result.reply end
-    local saved = self:_remember(job.sid, read, reply, job.tasks and { task = mark } or nil,
+    local saved = self:_remember(job, read, reply, job.tasks and { task = mark } or nil,
       offer and { offer = offer } or nil)
     -- метка не легла (миграция 3 сорвалась, сбой записи) — флаг; ритм её не увидит
     if kind then self:_log("riddle: entry task=" .. kind .. (saved and "" or " saved=no")) end
-    self:_save_owner_name(job.persona_id, result.name)
+    self:_save_owner_name(job, result.name)
     -- связность закрытой печати; печать успела открыться — список уже сброшен, реплика ему не принадлежит
     if job.closed and not self:_data_ok() then add_closed_turn(self.closed_turns, read, reply) end
     job.answered = true -- реплики записаны: finish проверит, не назрела ли свёртка
@@ -1030,7 +1041,7 @@ function Controller:_answer(job, result, err)
     -- «ответ идёт»: ответа на эту запись не будет. Нечитаемое — не записывается. Текст записи в лог не идёт
     if not Controller.readable(result) then return self:_pick(self:texts("unreadable")) end
     local reply = self:_pick(self:texts("sleepy"))
-    self:_remember(job.sid, result.read, reply)
+    self:_remember(job, result.read, reply)
     job.answered = true -- реплики записаны: finish проверит, не назрела ли свёртка
     return reply
   end
@@ -1053,7 +1064,8 @@ function Controller:seal_toggle()
   self.closed_turns = {}
   self.followup_due = true
   local welcome = self:_pick(self:texts("welcomes"))
-  -- строка ждёт ответа: вопрос идёт вместе с приветствием (закрытая страница показывала приглашение)
+  -- строка ждёт ответа: вопрос идёт вместе с приветствием (страница при закрытой печати тоже задала бы его —
+  -- opening_text и _begin, — но ключ открывает печать без страницы)
   local ask = self:_pending_ask()
   if ask then
     self.asked = ask
