@@ -301,6 +301,20 @@ function tests.test_seal_fields_single_list()
   end
 end
 
+-- дефолт поля живёт в SEAL_FIELDS: новое поле с default получает его после config.load без других правок
+function tests.test_seal_field_default_comes_from_the_list()
+  table.insert(config.SEAL_FIELDS, { name = "probe", kind = "boolean", default = true })
+  local ok, err = pcall(function()
+    t.eq(seal_of("").probe, true, "конфига нет — default поля")
+    t.eq(seal_of("seal = { key = true }").probe, true, "seal без поля — default поля")
+  end)
+  table.remove(config.SEAL_FIELDS)
+  if not ok then error(err, 0) end
+  t.eq(seal_of("").probe, nil, "поле убрано — значения нет")
+  t.eq(seal_of("").remember, true, "remember по умолчанию true")
+  t.eq(seal_of("").minutes, nil, "поле без default — nil")
+end
+
 function tests.test_seal_remember_false()
   local s = seal_of("seal = { key = true, remember = false }")
   t.eq(s.remember, false)

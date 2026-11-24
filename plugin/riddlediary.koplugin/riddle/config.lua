@@ -62,13 +62,14 @@ local function clean_providers(list)
 end
 
 -- поля таблицы seal — одно место: разбор (parse_seal) и сборка строки для устройства (seal_lua, tools/push_config.sh)
--- читают только этот список. kind: boolean — true/false; count — целое ≥ 1
+-- читают только этот список. kind: boolean — true/false; count — целое ≥ 1. default — значение, пока поле не
+-- задано (нет default — поля в таблице нет)
 config.SEAL_FIELDS = {
-  { name = "key", kind = "boolean" },
+  { name = "key", kind = "boolean", default = false },
   { name = "minutes", kind = "count" },
-  { name = "on_sleep", kind = "boolean" },
-  { name = "remember", kind = "boolean" },
-  { name = "off", kind = "boolean" },
+  { name = "on_sleep", kind = "boolean", default = false },
+  { name = "remember", kind = "boolean", default = true },
+  { name = "off", kind = "boolean", default = false },
 }
 
 local SEAL_KIND = {}
@@ -85,7 +86,8 @@ end
 -- вида, правило закрытия без key): печать тогда есть и закрыта; off побеждает всё, в том числе битые правила — это
 -- выход из битого конфига
 function config.parse_seal(raw)
-  local s = { on = false, key = false, on_sleep = false, remember = true, off = false }
+  local s = { on = false }
+  for _, f in ipairs(config.SEAL_FIELDS) do s[f.name] = f.default end
   if raw == nil then return s end
   local invalid
   if type(raw) ~= "table" then
