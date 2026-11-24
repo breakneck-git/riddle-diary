@@ -175,6 +175,24 @@ function T.test_cloud_weighted_greedy()
   t.ok(math.abs(d - 2.5) < 1e-9, "cloud=" .. tostring(d))
 end
 
+-- обход в обе стороны: a = 0,1,7, b = 2,4,7 по оси x. Лучший обход a→b — 7/3, b→a — 2 (с b3: 7→7 ·1, 2→1 ·⅔,
+-- 4→0 ·⅓); расстояние — меньшее, одно и то же при любом порядке аргументов
+function T.test_cloud_both_directions()
+  local a, b = { { 0, 0 }, { 1, 0 }, { 7, 0 } }, { { 2, 0 }, { 4, 0 }, { 7, 0 } }
+  local ab, ba = glyph.cloud(a, b), glyph.cloud(b, a)
+  t.ok(math.abs(ab - 2) < 1e-9, "cloud(a, b)=" .. tostring(ab))
+  t.ok(math.abs(ba - 2) < 1e-9, "cloud(b, a)=" .. tostring(ba))
+end
+
+-- рамка ровно SIZE — ещё знак: квадрат со стороной SIZE проходит ворота match и fits
+function T.test_size_boundary_passes()
+  local s = glyph.SIZE
+  local square = { { p = { 200, 300, 200 + s, 300, 200 + s, 300 + s, 200, 300 + s, 200, 300 } } }
+  local ok, dist = glyph.match(square, { square })
+  t.eq(ok, true, "квадрат со стороной SIZE против себя, dist=" .. tostring(dist))
+  t.eq(glyph.fits(square), true, "квадрат со стороной SIZE годится в образец")
+end
+
 function T.test_fits_accepts_own_sign()
   local ok, why = glyph.fits(TR.square)
   t.eq(ok, true, "квадрат годится в знак: " .. tostring(why))
