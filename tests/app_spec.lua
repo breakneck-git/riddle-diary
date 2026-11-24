@@ -174,6 +174,25 @@ function T.test_closed_seal_without_memory_answers_for_config_line()
   end
   t.ok(system:find(prompt.NONE_PERSONA, 1, true), "нейтральный вид (NONE_VIEW) в system")
   t.ok(system:find(prompt.SEAL_CLOSED, 1, true), "правило закрытой печати")
+  t.ok(system:find("Отвечай на языке записи", 1, true), "язык — записи, не «по-русски»")
+  t.ok(not system:find("по-русски", 1, true), "язык не зашит")
+  t.ok(system:find("О себе говоришь без рода", 1, true), "о себе — без рода")
+  t.ok(not system:find("в мужском роде", 1, true) and not system:find("в женском роде", 1, true), "род не назван")
+end
+
+-- открытая печать без базы и строка конфига не «Методов»: нейтральный ответ — только закрытой печати (данных нет,
+-- персону взять негде). Открытая модель не зовёт и показывает фразу сбоя
+function T.test_open_seal_without_memory_fails_for_config_line_without_model_call()
+  local env = make({ gemini_key = "km", seal = stand.none(), whose = "Hermione Granger" })
+  t.ok(env.deps.memory == nil, "база не открылась")
+  env.script[1] = { body = resp({ read = "кто ты", reply = "Не должно прозвучать." }) }
+  local text = env.ctrl:on_page(PNG)
+  -- персоны нет — фраза сбоя из нейтрального пула (язык строки неизвестен — en), не ответ модели
+  local pool = texts.neutral.en[texts.NEUTRAL_FOR.fail_other]
+  local found = false
+  for _, p in ipairs(pool) do found = found or p == text end
+  t.ok(found, "фраза сбоя из нейтрального пула, не ответ модели: " .. tostring(text))
+  t.eq(#env.posts, 0, "модель не вызвана")
 end
 
 -- devmode доходит до контроллера через app.new_controller: без него текст read в лог не идёт
