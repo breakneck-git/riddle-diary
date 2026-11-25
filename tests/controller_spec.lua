@@ -388,6 +388,58 @@ function T.test_wrong_figure_is_normal_page()
   t.ok(not env.ctrl.seal_open)
 end
 
+-- промах ключа — одна строка лога с причиной (диагностика на руке владельца): ворота glyph.match, лучшее расстояние
+-- (только у gate=dist), число штрихов попытки. Ни координат, ни числа штрихов и рамки образца. Поведение прежнее:
+-- nil, печать на месте
+local function misses(env)
+  local out = {}
+  for _, l in ipairs(env.logs) do
+    if l:find("riddle: key miss", 1, true) then out[#out + 1] = l end
+  end
+  return out
+end
+
+local function scaled(strokes, k)
+  local out = {}
+  for i, s in ipairs(strokes) do
+    local p = {}
+    for j = 1, #s.p do p[j] = s.p[j] * k end
+    out[i] = { p = p }
+  end
+  return out
+end
+
+function T.test_key_miss_logs_count_gate()
+  local env = keyed()
+  -- owner_06 — роза владельца, одна черта двумя штрихами: 4 против 3 у образца
+  t.eq(env.ctrl:key_page(O.owner_06), nil)
+  t.ok(not env.ctrl.seal_open)
+  t.eq(table.concat(misses(env), "\n"), "riddle: key miss gate=count dist=- n=4")
+end
+
+function T.test_key_miss_logs_size_gate()
+  local env = keyed()
+  t.eq(env.ctrl:key_page(scaled(O.owner_03, 0.1)), nil, "та же роза, мельче SIZE")
+  t.ok(not env.ctrl.seal_open)
+  t.eq(table.concat(misses(env), "\n"), "riddle: key miss gate=size dist=- n=3")
+end
+
+function T.test_key_miss_logs_dist_gate()
+  local env = keyed()
+  local bars = { { p = { 100, 100, 500, 100 } }, { p = { 100, 250, 500, 250 } }, { p = { 100, 400, 500, 400 } } }
+  t.eq(env.ctrl:key_page(bars), nil, "три черты — не роза")
+  t.ok(not env.ctrl.seal_open)
+  local lines = misses(env)
+  t.eq(#lines, 1, table.concat(env.logs, "\n"))
+  t.ok(lines[1] and lines[1]:match("^riddle: key miss gate=dist dist=%d+%.%d%d n=3$"), tostring(lines[1]))
+end
+
+function T.test_key_match_logs_no_miss()
+  local env = keyed()
+  t.ok(env.ctrl:key_page(O.owner_03) ~= nil)
+  t.eq(#misses(env), 0, table.concat(env.logs, "\n"))
+end
+
 -- Review Focus 1: ответ, собранный при открытой печати, пришёл после закрытия ключом — не показывается; в память
 -- запись ложится, как решено в начале страницы (job.write): чернила растворились, память — единственная копия.
 -- В лог — только факт

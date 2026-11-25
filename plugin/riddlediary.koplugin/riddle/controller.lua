@@ -126,7 +126,8 @@ function Controller:_load_key()
 end
 
 -- страница из штрихов (виджет, до треугольника) -> фраза | nil. Ключ задан — страница, совпавшая с образцом
--- (glyph.match), сдвигает печать (seal_toggle): закрытую открывает, открытую закрывает; модель не зовётся.
+-- (glyph.match), сдвигает печать (seal_toggle): закрытую открывает, открытую закрывает; модель не зовётся. Промах —
+-- строка «riddle: key miss» в лог, страница идёт дальше.
 -- В режиме «задать ключ» страница до glyph.MAX_STROKES штрихов — попытка знака: модель её не видит, в память она
 -- не идёт (спека §5, шаги 2–6).
 -- Первый рисунок живёт только в памяти (key_first; сон, закрытие и перезапуск его сбрасывают); второй
@@ -136,7 +137,14 @@ function Controller:key_page(strokes)
   if #strokes == 0 or #strokes > glyph.MAX_STROKES then return nil end
   local drawings = self.seal.drawings
   if drawings then
-    if not glyph.match(strokes, drawings) then return nil end
+    local ok, dist, gate = glyph.match(strokes, drawings)
+    if not ok then
+      -- промах — строка для подбора порогов на руке владельца: ворота, расстояние, число штрихов попытки; ни координат,
+      -- ни числа штрихов и рамки образца
+      self:_log(string.format("riddle: key miss gate=%s dist=%s n=%d", gate,
+        gate == "dist" and string.format("%.2f", dist) or "-", #strokes))
+      return nil
+    end
     return self:seal_toggle()
   end
   if not self.seal.setting then return nil end

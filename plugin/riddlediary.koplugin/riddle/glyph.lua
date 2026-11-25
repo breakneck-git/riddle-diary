@@ -117,18 +117,22 @@ local function side(strokes)
 end
 
 -- рисунок, образец (список рисунков, каждый — список штрихов) -> совпал ли, расстояние до ближайшего рисунка
--- образца (math.huge — сравнивать не с чем). Ворота до облака: штрихов 1..MAX_STROKES, рамка не мельче SIZE, и
--- сравнивается только с рисунками образца с тем же числом штрихов
+-- образца (math.huge — сравнивать не с чем), ворота промаха | nil (совпал). Ворота до облака: "count" — штрихов не
+-- 1..MAX_STROKES или в образце нет рисунка с тем же числом штрихов; "size" — рамка мельче SIZE; после облака "dist" —
+-- ближайший рисунок дальше DIST
 function glyph.match(strokes, drawings)
   strokes = strokes or {}
-  if #strokes == 0 or #strokes > glyph.MAX_STROKES or side(strokes) < glyph.SIZE then return false, math.huge end
+  if #strokes == 0 or #strokes > glyph.MAX_STROKES then return false, math.huge, "count" end
+  if side(strokes) < glyph.SIZE then return false, math.huge, "size" end
   local a = cloud_of(strokes)
   local best = math.huge
   for _, d in ipairs(a and drawings or {}) do
     local b = #d == #strokes and cloud_of(d)
     if b then best = math.min(best, glyph.cloud(a, b)) end
   end
-  return best <= glyph.DIST, best
+  if best == math.huge then return false, best, "count" end
+  if best > glyph.DIST then return false, best, "dist" end
+  return true, best
 end
 
 -- рисунок -> годится ли в образец, причина отказа: "strokes" (штрихов 0 или больше MAX_STROKES), "size" (меньшая
