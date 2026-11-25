@@ -283,7 +283,9 @@ function llm.parse(status, body, want_json, format)
   if not obj then return nil, "not json" end
   if type(obj.read) ~= "string" then return nil, "no read" end
   local read = trim(obj.read)
-  -- пустой reply не ошибка: read может быть заветным словом, на которое отвечает печать (controller)
+  -- пустой reply не ошибка разбора: ответа не просит чтение страницы на карте (reply_optional), фраза карты (map) и
+  -- страница настройки обходятся без него (controller). Где он нужен, решают выше: llm.call держит такой ответ
+  -- запасным и идёт к следующему провайдеру, ответ на страницу без reply — «нечитаемо» (controller.usable)
   local reply = type(obj.reply) == "string" and trim(obj.reply) or ""
   -- task — метка дела из блока задач (prompt.TASK_FORMAT), tasks_source — название книги дел, picks — что советует
   -- ответ (prompt.PICKS_FORMAT); who, world, lang, yes — ответ настройки (prompt.setup): yes — только булево true,
