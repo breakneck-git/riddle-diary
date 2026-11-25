@@ -920,7 +920,9 @@ function Controller:_begin(png_path, with_run)
   if not asking and not deps.memory and not self:_builtin() then
     -- база не открылась (main.lua), а строка не «Методов»: персону взять негде. Открытой печати нужна память — фраза
     -- сбоя, модель не зовётся. Закрытой персона не нужна — ответ нейтральный (persona.NONE_VIEW: без персонажа, на
-    -- языке записи), без данных и без записи
+    -- языке записи), без данных и без записи. Без этой ветки открытая печать дошла бы до _open_context, упала бы там на
+    -- nil-базе, и общий pcall сборки job (ниже) отдал бы ту же фразу сбоя без модели: видимо ветку отличает только
+    -- строка лога (причина вместо ошибки Lua) — её держит tests/app_spec.lua test_open_seal_without_memory_logs_reason_not_crash
     if self:_data_ok() then
       self:_log("riddle: on_page failed: no memory")
       return nil, self:_pick(self:texts("fail_other"))
