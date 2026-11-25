@@ -1439,8 +1439,9 @@ function Diary:onPageDone()
     -- a sign is not a message: the page reaches neither the model nor the memory, nobody answers it; its mode opens in
     -- its turn in the queue, after the answer in flight. The triangle first and under any seal (the status page shows
     -- nothing of the diary; owner: «во всех случаях»); a rose of the winds only under an open seal (plan of the map).
-    -- Under a closed seal a page that is no triangle (a missed try at the seal key, say) gets no stroke file
-    -- (isSign, misses = not sealed)
+    -- Under a closed seal a page that is no triangle (a missed try at the seal key, say) gets no stroke file, and a
+    -- page that went to the key's check (a key is set) gets none even as a triangle: the key's drawing on the disk
+    -- would give it away (isSign, record)
     local ctl = self.controller
     -- an accidental touch (owner 2026-10-25): its PNG would be under png.MIN_SIDE on both sides
     local _, _, w, h = self:sampleBox(pg)
@@ -1449,7 +1450,8 @@ function Diary:onPageDone()
     -- the seal's key goes first, before the triangle (spec 2026-11-20-seal-key §5): a try at the sign (up to
     -- glyph.MAX_STROKES strokes; never an accidental touch) is not a message either -- its phrase takes the page's
     -- place in the queue, without the model
-    if ctl and not tiny and #pg.strokes <= glyph.MAX_STROKES then
+    local key_try = ctl and not tiny and #pg.strokes <= glyph.MAX_STROKES
+    if key_try then
         local was_open = ctl.seal_open
         local phrase = ctl:key_page(pg.strokes)
         if phrase then
@@ -1461,8 +1463,11 @@ function Diary:onPageDone()
             return
         end
     end
-    local sealed = ctl and not ctl.seal_open
-    if self:isSign(triangle, "triangle", pg.strokes, not sealed) then
+    local record -- every page up to the sign's strokes
+    if ctl and not ctl.seal_open then
+        if key_try and ctl.seal.drawings then record = false else record = "hits" end
+    end
+    if self:isSign(triangle, "triangle", pg.strokes, record) then
         self:queueMode("status", pg, "triangle")
         return
     end
@@ -1881,12 +1886,14 @@ end
 -- a sign drawn with the pen? mod — its recognizer (riddle.rose, riddle.triangle: detect, CRITERIA, MAX_STROKES), name —
 -- its word in the log. Devmode only, for tuning the thresholds on the owner's hand (A10): its score and each criterion
 -- (a share of its threshold) go to the log, and a page with no more strokes than the sign can have is written as a
--- stroke file <rose_dir>/<time>-<n>.lua (the fixtures' format), so live attempts become fixtures. misses == false: only
--- a recognized sign is written (the page was not meant as a sign attempt), the log line stays
-function Diary:isSign(mod, name, strokes, misses)
+-- stroke file <rose_dir>/<time>-<n>.lua (the fixtures' format), so live attempts become fixtures. record: nil -- such a
+-- page is written; "hits" -- only a recognized sign (the page was not meant as a sign attempt); false -- none (a try at
+-- the seal's key: its drawing is the owner's secret). The log line stays
+function Diary:isSign(mod, name, strokes, record)
     local ok, score, why = mod.detect(strokes)
     if not self.devmode then return ok end
-    local file = (ok or misses ~= false) and #strokes <= mod.MAX_STROKES and self:recordStrokes(strokes)
+    local file = record ~= false and (ok or record ~= "hits") and #strokes <= mod.MAX_STROKES
+        and self:recordStrokes(strokes)
     local parts = {}
     for _, k in ipairs(mod.CRITERIA) do
         if why and why[k] then parts[#parts + 1] = string.format("%s=%.2f", k, why[k]) end

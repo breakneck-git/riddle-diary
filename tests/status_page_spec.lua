@@ -259,7 +259,7 @@ end
 function T.test_rose_under_open_seal_still_opens_map()
   local d = diary()
   d.controller.seal.open = true
-  page_done(d, strokes_of(RF, "rose_ccw"))
+  page_done(d, strokes_of(RF, "rose_tilted_30")) -- роза, не совпавшая с ключом: прошла сверку промахом
   run(1)
   t.ok(d.map, "карта")
   t.eq(d.status, nil)
@@ -878,6 +878,30 @@ function T.test_closed_seal_no_record_of_failed_sign()
   page_done(d, dissolved(O.owner_03))
   t.eq(d.controller.seal_open, true, "ключ открыл печать")
   t.eq(#files(d.rose_dir), 0, "ключ — файла нет")
+end
+
+-- Task 42313e60-bc8d-8110: devmode, закрытая печать, образец есть — страница, ушедшая на сверку ключа, в roses не
+-- пишется, даже если она ещё и треугольник (рисунок ключа на диске — секрет владельца); страница состояния при этом
+-- открывается, оценка в журнале остаётся. Под открытой печатью роза пишется, как раньше
+function T.test_closed_keyed_seal_no_record_of_triangle_key_try()
+  local d = keyed_diary()
+  d.devmode, d.rose_dir = true, tmpdir()
+  page_done(d, strokes_of(TF, "equilateral"))
+  t.eq(d.controller.seal_open, false, "треугольник не ключ")
+  t.eq(count("riddle: triangle yes"), 1, "оценка в журнале: " .. table.concat(LOG, "\n"))
+  t.eq(#files(d.rose_dir), 0, "попытка ключа, узнанная треугольником, — файла нет")
+  run(1)
+  t.ok(d.status, "страница состояния открыта")
+end
+
+function T.test_open_keyed_seal_still_records_rose()
+  local d = keyed_diary()
+  d.devmode, d.rose_dir = true, tmpdir()
+  page_done(d, dissolved(O.owner_03))
+  t.eq(d.controller.seal_open, true, "ключ открыл печать")
+  page_done(d, strokes_of(RF, "rose_tilted_30")) -- роза, не совпавшая с ключом: прошла сверку промахом
+  t.eq(count("riddle: rose yes"), 1, table.concat(LOG, "\n"))
+  t.eq(#files(d.rose_dir), 1, "открытая печать, роза — файл есть")
 end
 
 -- ключ открывает и закрывает печать со страницы; модель не зовётся
