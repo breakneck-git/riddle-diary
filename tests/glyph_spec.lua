@@ -117,13 +117,97 @@ function T.test_order_and_direction_free()
   end
 end
 
--- задуманный промах (контракт glyph): своя роза, нарисованная 4 штрихами (черта в два), против образца из роз в 3
--- штриха не открывает — ложное открытие хуже промаха
-function T.test_stroke_count_gate_planned_miss()
-  t.eq(#O.owner_06, 4) t.eq(#O.owner_01, 3) t.eq(#O.owner_02, 3)
-  local ok, dist = glyph.match(O.owner_06, { O.owner_01, O.owner_02 })
+-- разрыв пера (дело 25.11, рука владельца): своя роза, где одна черта двумя штрихами (06 — перо село назад внахлёст,
+-- 12 — с зазором), открывает образец из роз в 3 штриха. Раньше — промах по числу штрихов
+function T.test_owner_rose_with_break_opens()
+  for _, name in ipairs({ "owner_06", "owner_12" }) do
+    t.eq(#O[name], 4)
+    local ok, dist, gate = glyph.match(O[name], { O.owner_01, O.owner_02 })
+    t.ok(ok, name .. ": роза с разрывом не открыла, dist=" .. tostring(dist) .. " gate=" .. tostring(gate))
+  end
+end
+
+-- штрих -> куски: cuts — доли длины списка точек, где перо оторвалось; drop > 0 — столько точек пропало в зазоре,
+-- drop < 0 — следующий кусок начат на столько точек раньше (внахлёст)
+local function torn(stroke, cuts, drop)
+  local p = stroke.p
+  local n = #p / 2
+  local out, from = {}, 1
+  for k = 1, #cuts + 1 do
+    local to = k <= #cuts and math.floor(n * cuts[k]) or n
+    local q = {}
+    for i = from, to do q[#q + 1], q[#q + 2] = p[2 * i - 1], p[2 * i] end
+    out[#out + 1] = { p = q }
+    from = math.max(1, to + 1 + drop)
+  end
+  return out
+end
+
+-- тот же знак, перо оторвано один или два раза посреди стороны (с зазором и внахлёст), открывает образец из целого
+-- знака. Углы квадрата — на долях 0.25, 0.5, 0.75: отрыв в углу не разрыв (направление ломается) — его не отличить от
+-- касания двух разных штрихов
+function T.test_torn_sign_opens_whole_key()
+  local key = { TR.square }
+  for _, c in ipairs({ { { 0.4 }, 2 }, { { 0.35, 0.6 }, 2 }, { { 0.4 }, -4 }, { { 0.3, 0.7 }, -4 } }) do
+    local attempt = torn(TR.square[1], c[1], c[2])
+    t.eq(#attempt, #c[1] + 1)
+    local ok, dist, gate = glyph.match(attempt, key)
+    t.ok(ok, #attempt .. " куска, drop=" .. c[2] .. ": не открыл, dist=" .. tostring(dist) .. " gate=" .. tostring(gate))
+  end
+end
+
+-- задуманный промах: отрыв ровно в углу (0.5 — угол квадрата) — не разрыв, а два штриха под углом
+function T.test_corner_lift_is_not_a_break()
+  local ok, _, gate = glyph.match(torn(TR.square[1], { 0.5 }, 2), { TR.square })
   t.eq(ok, false)
-  t.eq(dist, math.huge)
+  t.eq(gate, "count")
+end
+
+-- и наоборот: образец задан с разрывом, знак нарисован одним штрихом — открывает
+function T.test_whole_sign_opens_torn_key()
+  local key = { torn(TR.square[1], { 0.6 }, 2), torn(TR.square[1], { 0.4 }, -4) }
+  local ok, dist, gate = glyph.match(TR.square, key)
+  t.ok(ok, "целый знак не открыл образец с разрывом, dist=" .. tostring(dist) .. " gate=" .. tostring(gate))
+end
+
+-- касание — не разрыв: у rose_ccw горизонтальная черта кончается у начала круга (зазор 11 px), но круг идёт
+-- поперёк неё. «Ф» (круг и стойка, 2 штриха) образец из такой розы не открывает: штрихи склеились бы по одному зазору
+function T.test_touching_strokes_not_a_break()
+  local ok, dist, gate = glyph.match(R.letter_ef, { R.rose_ccw })
+  t.ok(not ok, "«Ф» открыла розу с касанием, dist=" .. tostring(dist))
+  t.eq(gate, "count")
+end
+
+-- матрица «образец × чужие»: ни одна чужая фигура не открывает ни один образец. Образцы — розы владельца (каждая с
+-- соседями того же числа штрихов, в том числе 06+12 с разрывом) и треугольники одной руки; чужие розам — буквы со
+-- страницы и все треугольники и не-треугольники, чужие треугольникам — буквы и розы владельца. На коде до склейки
+-- разрывов — тоже 0 (сверено пробой); не-треугольники против треугольников открывают и до неё (трапеция, λ, «Д»):
+-- допуск облака, не число штрихов — здесь не проверяются
+function T.test_strangers_matrix()
+  local keys = {}
+  for i, name in ipairs(O.ROSES) do keys[#keys + 1] = { "роза " .. name, { O[name], unpack(same_strokes(O, O.ROSES, i)) }, "rose" } end
+  for i, name in ipairs(SAME_TRIANGLE) do
+    keys[#keys + 1] = { "треугольник " .. name, { TR[name], unpack(same_strokes(TR, SAME_TRIANGLE, i)) }, "triangle" }
+  end
+  local strangers = { rose = {}, triangle = {} }
+  for _, n in ipairs(LETTERS) do
+    strangers.rose[#strangers.rose + 1] = { n, R[n] }
+    strangers.triangle[#strangers.triangle + 1] = { n, R[n] }
+  end
+  for _, list in ipairs({ TR.TRIANGLES, TR.NON_TRIANGLES }) do
+    for _, n in ipairs(list) do strangers.rose[#strangers.rose + 1] = { n, TR[n] } end
+  end
+  for _, n in ipairs(O.ROSES) do strangers.triangle[#strangers.triangle + 1] = { n, O[n] } end
+  local opened, pairs_n = {}, 0
+  for _, k in ipairs(keys) do
+    for _, s in ipairs(strangers[k[3]]) do
+      pairs_n = pairs_n + 1
+      local ok, dist = glyph.match(s[2], k[2])
+      if ok then opened[#opened + 1] = string.format("%s открыл образец «%s», dist=%.2f", s[1], k[1], dist) end
+    end
+  end
+  t.ok(pairs_n > 500, "матрица не пустая: " .. pairs_n)
+  t.eq(table.concat(opened, "\n"), "")
 end
 
 -- мельче SIZE — не знак, даже если фигура та же: △ 120 px против образца-треугольника

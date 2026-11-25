@@ -411,10 +411,10 @@ end
 
 function T.test_key_miss_logs_count_gate()
   local env = keyed()
-  -- owner_06 — роза владельца, одна черта двумя штрихами: 4 против 3 у образца
-  t.eq(env.ctrl:key_page(O.owner_06), nil)
+  -- «Ф» — круг и стойка: 2 штриха против 3 у роз образца, и разрывом её не объяснить
+  t.eq(env.ctrl:key_page(require("fixtures.rose_strokes").letter_ef), nil)
   t.ok(not env.ctrl.seal_open)
-  t.eq(table.concat(misses(env), "\n"), "riddle: key miss gate=count dist=- n=4")
+  t.eq(table.concat(misses(env), "\n"), "riddle: key miss gate=count dist=- n=2")
 end
 
 function T.test_key_miss_logs_size_gate()

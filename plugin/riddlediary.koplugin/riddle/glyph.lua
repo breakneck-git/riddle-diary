@@ -3,9 +3,12 @@
 -- расстояние — взвешенное жадное сопоставление точек в обе стороны. Порядок и направление штрихов не важны, место на
 -- странице — тоже. Чистые функции без KOReader, на общей геометрии пера (riddle.pen).
 -- Ложное открытие хуже пропуска: до облака — ворота (штрихов 1..MAX_STROKES, рамка не мельче SIZE, число штрихов —
--- как у рисунка образца); DIST — по фикстурам (tests/glyph_spec.lua), с зазором до чужих фигур.
--- Контракт: все рисунки образца — с одним числом штрихов (режим «задать ключ» требует, чтобы второй рисунок совпал
--- с первым и по нему); знак, нарисованный другим числом штрихов, — промах, не открытие.
+-- как у рисунка образца с точностью до разрывов пера); DIST — по фикстурам (tests/glyph_spec.lua), с зазором до
+-- чужих фигур.
+-- Число штрихов — несущая примета: облако его не видит («Ф» против розы — 1.27 < DIST). Разрыв пера (перо оторвалось
+-- и село рядом, повело штрих дальше) его не меняет: рисунок сводится склейкой разрывов к меньшему числу штрихов, и
+-- знак совместим с рисунком образца, если у них есть общее число. Касание (штрих начат у конца другого, но поперёк)
+-- — не разрыв.
 local pen = require("riddle.pen")
 local rose = require("riddle.rose")
 local triangle = require("riddle.triangle")
@@ -18,6 +21,14 @@ glyph.SIZE = triangle.SIZE -- меньшая сторона рамки знак�
 -- допуск cloud: свои пары фикстур в тестах — до 2.222, с образцом из одного рисунка — до 3.470; чужие после
 -- ворот — от 3.312 (letter_ef против образца-треугольника в два штриха)
 glyph.DIST = 3.0
+-- разрыв пера (дело 25.11: у владельца 2 розы из 12 — черта двумя штрихами, перо село в 40 и 85 px, внахлёст):
+-- следующий штрих начат не дальше BREAK_GAP большей стороны рамки рисунка от конца предыдущего, и направления конца
+-- и начала (по BREAK_TAIL стороны рамки) расходятся не больше BREAK_TURN градусов. Пробой по фикстурам: разрывы
+-- владельца — 0.12 и 0.09 стороны рамки, 0.2 — с запасом; на 0.3 смайлик открывает круг с крестом; без направления
+-- «Ф» открывает розы, где черта касается круга (rose_ccw)
+glyph.BREAK_GAP = 0.2
+glyph.BREAK_TURN = 45
+glyph.BREAK_TAIL = 0.08
 
 -- список точек меньше другого: первая разная координата, потом длина
 local function less(a, b)
@@ -106,6 +117,67 @@ function glyph.cloud(a, b)
   return best
 end
 
+-- направление ломаной на её конце: от точки за reach px до конца к последней -> единичный вектор | nil (длины нет)
+local function heading(list, reach)
+  local acc, i = 0, #list
+  while i > 1 and acc < reach do
+    acc = acc + pen.dist(list[i - 1], list[i])
+    i = i - 1
+  end
+  local a, b = list[i], list[#list]
+  local d = a and pen.dist(a, b) or 0
+  if d == 0 then return nil end
+  return { (b[1] - a[1]) / d, (b[2] - a[2]) / d }
+end
+
+-- рисунок -> числа штрихов, к которым он сводится склейкой разрывов: { [n] = true, … }, своё число — всегда.
+-- Склейка — по одной, самым малым прыжком пера среди разрывов (pen.joins: оба направления каждого штриха)
+local function counts(strokes)
+  local lists, all = {}, {}
+  for i, s in ipairs(strokes) do
+    lists[i] = pen.points(s)
+    for _, q in ipairs(lists[i]) do all[#all + 1] = q end
+  end
+  local out = { [#lists] = true }
+  local x0, y0, x1, y1 = pen.bounds(all)
+  if x0 == math.huge then return out end
+  local side = math.max(x1 - x0, y1 - y0)
+  local gap, reach, turn = glyph.BREAK_GAP * side, glyph.BREAK_TAIL * side, math.cos(math.rad(glyph.BREAK_TURN))
+  while #lists > 1 do
+    local best, bi, bj, blist = math.huge
+    for i = 1, #lists do
+      for j = i + 1, #lists do
+        local n = #lists[i]
+        for _, join in ipairs(pen.joins(lists[i], lists[j])) do
+          if join.jump <= gap and join.jump < best and n > 0 and #join.list > n then
+            -- join.list — первый штрих (n точек), за ним второй; второй развёрнут, чтобы его начало шло первым
+            local head, tail = {}, {}
+            for k = 1, n do head[k] = join.list[k] end
+            for k = #join.list, n + 1, -1 do tail[#tail + 1] = join.list[k] end
+            local a, b = heading(head, reach), heading(tail, reach)
+            -- b смотрит назад от начала второго штриха: продолжение — когда a и −b близки
+            if a and b and -(a[1] * b[1] + a[2] * b[2]) >= turn then best, bi, bj, blist = join.jump, i, j, join.list end
+          end
+        end
+      end
+    end
+    if not bi then break end
+    table.remove(lists, bj)
+    lists[bi] = blist
+    out[#lists] = true
+  end
+  return out
+end
+
+-- два рисунка -> совместимы ли по числу штрихов: есть общее число после склейки разрывов
+local function compatible(a, b)
+  local ca, cb = counts(a), counts(b)
+  for n in pairs(ca) do
+    if cb[n] then return true end
+  end
+  return false
+end
+
 -- рисунок -> меньшая сторона его рамки, px (0 — точек нет)
 local function side(strokes)
   local all = {}
@@ -118,8 +190,8 @@ end
 
 -- рисунок, образец (список рисунков, каждый — список штрихов) -> совпал ли, расстояние до ближайшего рисунка
 -- образца (math.huge — сравнивать не с чем), ворота промаха | nil (совпал). Ворота до облака: "count" — штрихов не
--- 1..MAX_STROKES или в образце нет рисунка с тем же числом штрихов; "size" — рамка мельче SIZE; после облака "dist" —
--- ближайший рисунок дальше DIST
+-- 1..MAX_STROKES или в образце нет рисунка, совместимого по числу штрихов (с точностью до разрывов пера); "size" —
+-- рамка мельче SIZE; после облака "dist" — ближайший рисунок дальше DIST
 function glyph.match(strokes, drawings)
   strokes = strokes or {}
   if #strokes == 0 or #strokes > glyph.MAX_STROKES then return false, math.huge, "count" end
@@ -127,7 +199,7 @@ function glyph.match(strokes, drawings)
   local a = cloud_of(strokes)
   local best = math.huge
   for _, d in ipairs(a and drawings or {}) do
-    local b = #d == #strokes and cloud_of(d)
+    local b = compatible(strokes, d) and cloud_of(d)
     if b then best = math.min(best, glyph.cloud(a, b)) end
   end
   if best == math.huge then return false, best, "count" end
