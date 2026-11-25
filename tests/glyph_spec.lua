@@ -178,6 +178,85 @@ function T.test_touching_strokes_not_a_break()
   t.eq(gate, "count")
 end
 
+-- атака разрывами (ревью a54ff28): чужой рисунок с оторванным пером набирает число штрихов образца, где разрыв
+-- склеен. «Ф», крест и четвёрки, каждый штрих оторван в одном или двух местах (зазор и внахлёст), против образцов
+-- с рваными розами владельца (06 — 4 штриха, черта внахлёст; 12 — горизонталь с зазором) и с ними же в паре с целой
+-- розой, как ляжет в «задать ключ». Склейка разрывов не открывает ничего сверх правила до неё: открыл образец — значит,
+-- открывает и рисунок этого образца с тем же числом штрихов, как нарисовано (на a54ff28 — 234 открытия склейкой).
+-- Само правило до склейки рваную «Ф» в 3–4 штриха пускает к сравнению с розой того же числа штрихов — держит одно
+-- облако. Остаток (замер 25.11) закреплён поимённо: «4» и закрытая «4», оторванные ровно в углу (3 штриха, не
+-- склеиваются), открывают образцы с owner_12 (после склейки 3 штриха) при dist 2.96 и 3.00 — фигура того же класса,
+-- что и до склейки: так же открывает owner_10 в 3 штриха (2.37 и 2.35)
+local TEAR_RESIDUE = { ["digit_4>06+12"] = true, ["digit_4>12"] = true, ["digit_4>12+03"] = true,
+                       ["digit_4_closed>06+12"] = true, ["digit_4_closed>12"] = true, ["digit_4_closed>12+03"] = true }
+local function tears(strokes)
+  local out = {}
+  for i, s in ipairs(strokes) do
+    for _, f in ipairs({ 0.1, 0.3, 0.5, 0.7, 0.9 }) do
+      for _, drop in ipairs({ 2, -4 }) do
+        local pieces = torn(s, { f }, drop)
+        local a = {}
+        for k, t2 in ipairs(strokes) do
+          if k == i then
+            for _, piece in ipairs(pieces) do a[#a + 1] = piece end
+          else
+            a[#a + 1] = t2
+          end
+        end
+        out[#out + 1] = a
+        -- второй отрыв в другом штрихе, пока штрихов не больше MAX_STROKES
+        for j = i + 1, #a do
+          if j ~= i and j ~= i + 1 and #a < glyph.MAX_STROKES then
+            local b = {}
+            for k, t2 in ipairs(a) do
+              if k == j then
+                for _, piece in ipairs(torn(t2, { 1 - f }, drop)) do b[#b + 1] = piece end
+              else
+                b[#b + 1] = t2
+              end
+            end
+            out[#out + 1] = b
+          end
+        end
+      end
+    end
+  end
+  return out
+end
+
+function T.test_tear_attack_on_torn_owner_key()
+  local keys = {
+    { "06+12", { O.owner_06, O.owner_12 } }, { "06", { O.owner_06 } }, { "12", { O.owner_12 } },
+    { "06+01", { O.owner_06, O.owner_01 } }, { "12+03", { O.owner_12, O.owner_03 } },
+  }
+  local attackers = { { "letter_ef", R.letter_ef }, { "cross_only", R.cross_only }, { "digit_4", TR.digit_4 },
+                      { "digit_4_closed", TR.digit_4_closed } }
+  local opened, tries, residue = {}, 0, {}
+  for _, at in ipairs(attackers) do
+    for _, attempt in ipairs(tears(at[2])) do
+      for _, k in ipairs(keys) do
+        tries = tries + 1
+        local ok, dist = glyph.match(attempt, k[2])
+        local raw = {}
+        for _, d in ipairs(k[2]) do
+          if #d == #attempt then raw[#raw + 1] = d end
+        end
+        if ok and not glyph.match(attempt, raw) then
+          if TEAR_RESIDUE[at[1] .. ">" .. k[1]] then
+            residue[at[1] .. ">" .. k[1]] = true
+            t.ok(glyph.match(attempt, { O.owner_10 }), at[1] .. ": остаток не открывает owner_10 — уже не прежний класс")
+          else
+            opened[#opened + 1] = string.format("%s (%d штр.) открыл %s склейкой, dist=%.2f", at[1], #attempt, k[1], dist)
+          end
+        end
+      end
+    end
+  end
+  t.ok(tries > 400, "проб: " .. tries)
+  t.eq(#opened, 0, table.concat(opened, "\n"))
+  for k in pairs(TEAR_RESIDUE) do t.ok(residue[k], k .. ": остаток закрылся — убрать из TEAR_RESIDUE") end
+end
+
 -- матрица «образец × чужие»: ни одна чужая фигура не открывает ни один образец. Образцы — розы владельца (каждая с
 -- соседями того же числа штрихов, в том числе 06+12 с разрывом) и треугольники одной руки; чужие розам — буквы со
 -- страницы и все треугольники и не-треугольники, чужие треугольникам — буквы и розы владельца. На коде до склейки

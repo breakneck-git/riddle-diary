@@ -6,9 +6,10 @@
 -- как у рисунка образца с точностью до разрывов пера); DIST — по фикстурам (tests/glyph_spec.lua), с зазором до
 -- чужих фигур.
 -- Число штрихов — несущая примета: облако его не видит («Ф» против розы — 1.27 < DIST). Разрыв пера (перо оторвалось
--- и село рядом, повело штрих дальше) его не меняет: рисунок сводится склейкой разрывов к меньшему числу штрихов, и
--- знак совместим с рисунком образца, если у них есть общее число. Касание (штрих начат у конца другого, но поперёк)
--- — не разрыв.
+-- и село рядом, повело штрих дальше) его не меняет: знак совместим с рисунком образца, если у них одно число штрихов
+-- как нарисовано или одно число после склейки всех разрывов. Промежуточные склейки не в счёт: иначе чужой рисунок с
+-- лишним оторванным куском набирает число штрихов образца, у которого разрыв склеен (атака разрывами, ревью a54ff28).
+-- Касание (штрих начат у конца другого, но поперёк) — не разрыв.
 local pen = require("riddle.pen")
 local rose = require("riddle.rose")
 local triangle = require("riddle.triangle")
@@ -130,17 +131,16 @@ local function heading(list, reach)
   return { (b[1] - a[1]) / d, (b[2] - a[2]) / d }
 end
 
--- рисунок -> числа штрихов, к которым он сводится склейкой разрывов: { [n] = true, … }, своё число — всегда.
--- Склейка — по одной, самым малым прыжком пера среди разрывов (pen.joins: оба направления каждого штриха)
-local function counts(strokes)
+-- рисунок -> число штрихов после склейки всех разрывов. Склейка — по одной, самым малым прыжком пера среди разрывов
+-- (pen.joins: оба направления каждого штриха)
+local function whole(strokes)
   local lists, all = {}, {}
   for i, s in ipairs(strokes) do
     lists[i] = pen.points(s)
     for _, q in ipairs(lists[i]) do all[#all + 1] = q end
   end
-  local out = { [#lists] = true }
   local x0, y0, x1, y1 = pen.bounds(all)
-  if x0 == math.huge then return out end
+  if x0 == math.huge then return #lists end
   local side = math.max(x1 - x0, y1 - y0)
   local gap, reach, turn = glyph.BREAK_GAP * side, glyph.BREAK_TAIL * side, math.cos(math.rad(glyph.BREAK_TURN))
   while #lists > 1 do
@@ -164,18 +164,8 @@ local function counts(strokes)
     if not bi then break end
     table.remove(lists, bj)
     lists[bi] = blist
-    out[#lists] = true
   end
-  return out
-end
-
--- два рисунка -> совместимы ли по числу штрихов: есть общее число после склейки разрывов
-local function compatible(a, b)
-  local ca, cb = counts(a), counts(b)
-  for n in pairs(ca) do
-    if cb[n] then return true end
-  end
-  return false
+  return #lists
 end
 
 -- рисунок -> меньшая сторона его рамки, px (0 — точек нет)
@@ -197,9 +187,11 @@ function glyph.match(strokes, drawings)
   if #strokes == 0 or #strokes > glyph.MAX_STROKES then return false, math.huge, "count" end
   if side(strokes) < glyph.SIZE then return false, math.huge, "size" end
   local a = cloud_of(strokes)
+  local glued = whole(strokes)
   local best = math.huge
   for _, d in ipairs(a and drawings or {}) do
-    local b = compatible(strokes, d) and cloud_of(d)
+    -- совместимы: одно число штрихов как нарисовано или после склейки всех разрывов (не промежуточное)
+    local b = (#d == #strokes or whole(d) == glued) and cloud_of(d)
     if b then best = math.min(best, glyph.cloud(a, b)) end
   end
   if best == math.huge then return false, best, "count" end
