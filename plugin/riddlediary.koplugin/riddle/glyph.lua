@@ -181,11 +181,14 @@ end
 -- рисунок, образец (список рисунков, каждый — список штрихов) -> совпал ли, расстояние до ближайшего рисунка
 -- образца (math.huge — сравнивать не с чем), ворота промаха | nil (совпал). Ворота до облака: "count" — штрихов не
 -- 1..MAX_STROKES или в образце нет рисунка, совместимого по числу штрихов (с точностью до разрывов пера); "size" —
--- рамка мельче SIZE; после облака "dist" — ближайший рисунок дальше DIST
-function glyph.match(strokes, drawings)
+-- рамка мельче SIZE; после облака "dist" — ближайший рисунок дальше DIST. opts — свой порог и свои ворота размера
+-- ({ dist = , size = }, nil — DIST и SIZE ключа): у знаков управления шаблоны вшитые, чужие фигуры к ним ближе
+-- (riddle.signs)
+function glyph.match(strokes, drawings, opts)
   strokes = strokes or {}
+  local limit = opts and opts.dist or glyph.DIST
   if #strokes == 0 or #strokes > glyph.MAX_STROKES then return false, math.huge, "count" end
-  if side(strokes) < glyph.SIZE then return false, math.huge, "size" end
+  if side(strokes) < (opts and opts.size or glyph.SIZE) then return false, math.huge, "size" end
   local a = cloud_of(strokes)
   local glued = whole(strokes)
   local best = math.huge
@@ -195,7 +198,7 @@ function glyph.match(strokes, drawings)
     if b then best = math.min(best, glyph.cloud(a, b)) end
   end
   if best == math.huge then return false, best, "count" end
-  if best > glyph.DIST then return false, best, "dist" end
+  if best > limit then return false, best, "dist" end
   return true, best
 end
 

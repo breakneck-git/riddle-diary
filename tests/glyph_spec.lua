@@ -391,6 +391,22 @@ function T.test_fits_rejects_many_strokes()
   t.eq(why, "strokes", "пустая страница")
 end
 
+-- свой порог и свои ворота размера — параметром (знаки управления, riddle.signs): без opts — DIST и SIZE ключа
+function T.test_match_opts_dist_and_size()
+  local key = { TR.equilateral }
+  local ok, d = glyph.match(TR.wobbly, key)
+  t.ok(ok, "без opts — порог ключа")
+  local ok2, d2, gate = glyph.match(TR.wobbly, key, { dist = d / 2 })
+  t.eq(ok2, false, "свой порог строже")
+  t.eq(gate, "dist")
+  t.eq(d2, d, "расстояние то же")
+  -- стрелка: меньшая сторона рамки 120 px < SIZE
+  local narrow = { { p = { 380, 650, 380, 300, 320, 380, 380, 300, 440, 380 } } }
+  t.eq(select(3, glyph.match(narrow, { narrow })), "size", "без opts — ворота SIZE")
+  t.eq(glyph.match(narrow, { narrow }, { size = 100 }), true, "свои ворота размера")
+  t.eq(select(3, glyph.match(narrow, { narrow }, { size = 121 })), "size", "свои ворота строже рамки")
+end
+
 function T.test_constants()
   t.eq(glyph.N, 64)
   t.eq(glyph.MAX_STROKES, 4)

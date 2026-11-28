@@ -134,6 +134,14 @@ local function healthy()
 end
 
 -- виджет с холстом; печать закрыта; тексты страницы — в d.painted, обновления экрана — в d.pushes
+-- подсветка устройства для знаков управления: уровень, шкала 25, журнал установок
+local function fake_light(level)
+  local l = { level = level, max = 25, sets = {} }
+  l.get = function() return l.level end
+  l.set = function(n) l.sets[#l.sets + 1] = n; l.level = n end
+  return l
+end
+
 local function diary(extra)
   clock, timeline, LOG = 0, {}, {}
   Diary.map_kept = nil
@@ -176,6 +184,8 @@ local function diary(extra)
     return out
   end
   d.statusSources = function() return healthy() end
+  d.dev = { light = fake_light(5) }
+  d.controlSources = function() return d.dev end
   d.controller.seal.open = false
   return d
 end
@@ -495,17 +505,19 @@ function T.test_devmode_triangle_logged_and_recorded_once()
   t.eq(count("file=" .. names[1]), 1)
 end
 
--- devmode: страницу проверили оба знака — файл штрихов один, обе строки называют его
-function T.test_devmode_both_signs_one_file()
+-- devmode: страницу проверили все знаки (треугольник, знаки управления, роза) — файл штрихов один, каждая строка
+-- оценки называет его
+function T.test_devmode_all_signs_one_file()
   local d = diary()
   d.devmode, d.rose_dir = true, tmpdir()
   d.controller.seal.open = true
   page_done(d, strokes_of(TF, "square"))
   t.eq(count("riddle: triangle no"), 1, table.concat(LOG, "\n"))
+  t.eq(count("riddle: sign no"), 1)
   t.eq(count("riddle: rose no"), 1)
   local names = files(d.rose_dir)
   t.eq(#names, 1, "страница записана один раз")
-  t.eq(count("file=" .. names[1]), 2)
+  t.eq(count("file=" .. names[1]), 3)
 end
 
 -- devmode, закрытая печать: попытка написать слово-печать из 1–2 штрихов — не попытка знака, в roses не пишется;
@@ -1021,6 +1033,118 @@ function T.test_resume_after_idle_on_map()
   t.eq(d.invite, invites + 1, "первая строка чистой страницы")
   run(3600)
   t.eq(d.invite, invites + 1, "одна")
+end
+
+-- Знаки управления (спека 2026-11-28-control-signs): ↑ на странице — подсветка на шаг ярче при любой печати, итог —
+-- фраза на месте страницы; страница не уходит ни в модель, ни в печать
+local shapes = require("riddle.sign_shapes")
+local UP = shapes.up[1]
+
+local function revealed_has(d, text)
+  for _, s in ipairs(d.revealed) do if s == text then return true end end
+  return false
+end
+
+function T.test_up_sign_brightens_any_seal()
+  for _, open in ipairs({ false, true }) do
+    local d = diary()
+    d.controller.seal.open = open
+    page_done(d, dissolved(UP))
+    run(1)
+    local sets = d.dev.light.sets
+    t.eq(#sets, 1, "печать открыта: " .. tostring(open))
+    t.eq(sets[1], 10)
+    t.eq(d.revealed[#d.revealed], "Подсветка 10 из 25")
+    t.eq(not_probe(d), 0, "знак не ушёл в модель")
+    t.eq(d.inflight, 0)
+    t.eq(count("riddle: control up light 5->10"), 1, table.concat(LOG, "\n"))
+  end
+end
+
+-- ↓ до выключения: итог виден и тогда, когда менять нечего
+function T.test_down_sign_turns_light_off()
+  local d = diary()
+  d.dev.light = fake_light(3)
+  page_done(d, dissolved(shapes.down[1]))
+  run(1)
+  t.eq(d.dev.light.sets[1], 0)
+  t.eq(d.revealed[#d.revealed], "Подсветка выключена")
+end
+
+-- ключ печати — первым: образец ключа — та же стрелка, страница-↑ переключает печать, подсветка не трогается
+function T.test_key_before_sign()
+  local d = diary({ load_key = function() return { UP, UP } end })
+  page_done(d, dissolved(UP))
+  run(1)
+  t.eq(d.controller.seal_open, true, "ключ открыл печать")
+  t.eq(#d.dev.light.sets, 0, "знак не сработал")
+end
+
+-- треугольник — раньше знаков: страница состояния, подсветка не трогается
+function T.test_triangle_before_sign()
+  local d = diary()
+  page_done(d, strokes_of(TF, "equilateral"))
+  run(1)
+  t.ok(d.status, "страница состояния")
+  t.eq(#d.dev.light.sets, 0)
+end
+
+-- закрытая печать с ключом: знак работает, но страница, ушедшая на сверку ключа, файлом штрихов не пишется
+function T.test_sign_under_keyed_closed_seal_no_file()
+  local d = keyed_diary()
+  d.devmode, d.rose_dir = true, tmpdir()
+  page_done(d, dissolved(UP))
+  run(1)
+  t.eq(d.controller.seal_open, false)
+  t.eq(d.dev.light.sets[1], 10, "команда выполнена")
+  t.eq(count("riddle: sign yes"), 1, table.concat(LOG, "\n"))
+  t.eq(#files(d.rose_dir), 0, "файла нет")
+end
+
+-- знак поверх проявляющегося ответа: перо гасит ответ, страница-знак — команда, не перебивание и не модель
+function T.test_sign_over_answer_no_interjection()
+  local d = diary()
+  page_done(d)
+  d.runner:done(reply("кто ты", "Я Том"))
+  run(0)
+  t.eq(d.answer and d.answer.phase, "reveal", "ответ проявляется")
+  d.page = { strokes = dissolved(UP), ink = { 10, 200, 100, 260 } }
+  d:hurryAnswer()
+  d:onPageDone()
+  for _, q in ipairs(d.queue) do t.ok(q.kind ~= "interject", "реплики на перебивание нет") end
+  run(30)
+  t.eq(d.dev.light.sets[1], 10)
+  t.ok(revealed_has(d, "Подсветка 10 из 25"), table.concat(d.revealed, " | "))
+  t.eq(not_probe(d), 1, "в модель ушла только первая страница")
+end
+
+-- знак, пока ответ модели в пути: не отказ и не модель; команда — в свою очередь, ответ приходит потом
+function T.test_sign_during_inflight()
+  local d = diary()
+  page_done(d)
+  t.eq(d.inflight, 1)
+  page_done(d, dissolved(UP))
+  t.eq(not_probe(d), 1, "знак не в модель")
+  t.eq(count("page during ponder -> refusal"), 0, "знак — не отказ")
+  run(1)
+  t.eq(d.dev.light.sets[1], 10, "команда не ждёт ответа")
+  d.runner:done(reply("кто ты", "Я Том"))
+  run(60)
+  t.ok(revealed_has(d, "Я Том"), table.concat(d.revealed, " | "))
+end
+
+-- сон, пока знак ждёт в очереди за ответом на экране: очередь сброшена, команда не выполняется
+function T.test_sleep_drops_queued_control()
+  local d = diary()
+  page_done(d)
+  d.runner:done(reply("кто ты", "Я Том"))
+  run(60)
+  t.ok(d.answer, "ответ на экране")
+  page_done(d, dissolved(UP))
+  d:onSuspend()
+  run(120)
+  t.eq(#d.dev.light.sets, 0, "команда не выполнена")
+  t.eq(count("riddle: control"), 0)
 end
 
 t.run(T)

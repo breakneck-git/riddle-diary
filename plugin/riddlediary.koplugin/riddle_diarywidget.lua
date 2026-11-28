@@ -87,6 +87,8 @@ local net = require("riddle.net")
 local rose = require("riddle.rose")
 local triangle = require("riddle.triangle")
 local glyph = require("riddle.glyph")
+local signs = require("riddle.signs")
+local control = require("riddle.control")
 local status = require("riddle.status")
 local str = require("riddle.str")
 local prompt = require("riddle.prompt")
@@ -1471,6 +1473,14 @@ function Diary:onPageDone()
         self:queueMode("status", pg, "triangle")
         return
     end
+    -- a sign of control (spec 2026-11-28-control-signs): under any seal, like the triangle -- the device, not the
+    -- diary's data. Its command runs in its turn in the queue, once the page's ink is gone (runControl)
+    local sign = self:isSign(signs, "sign", pg.strokes, record)
+    if sign then
+        self.queue[#self.queue + 1] = { kind = "control", sign = sign, top = top, page = pg }
+        self:nextAnswer()
+        return
+    end
     if ctl and ctl.seal_open and self:isRose(pg.strokes) then
         self:queueMode("map", pg, "rose")
         return
@@ -1670,6 +1680,7 @@ function Diary:nextAnswer()
         if s.lvl < last then return end -- sinkTick calls again
     end
     table.remove(self.queue, 1)
+    if q.kind == "control" then return self:runControl(q) end
     local open = MODES[q.kind]
     if open then
         self[open](self, q.why)
@@ -1725,7 +1736,7 @@ function Diary:answerStep(x, y, w, h)
 end
 
 -- kind: nil (an answer), "think" (thinking phrase), "busy" (refusal), "interject" (interjection), "key" (the seal key's
--- phrase; holds like an answer) — riddle.hold
+-- phrase), "control" (a sign of control's result; runControl) — both hold like an answer (riddle.hold)
 -- release: an interjection whose page turned out an accidental touch — no answer follows, it holds on a timer
 -- page: the page the phrase answers (the answer callback matches an interjection on screen by it)
 function Diary:revealAnswer(text, top, unlocked, kind, release, page)
@@ -1923,6 +1934,38 @@ function Diary:recordStrokes(strokes)
     f:close()
     self.recorded = { strokes = strokes, name = name }
     return name
+end
+
+-- a sign of control in its turn (q: the queue's entry, kind "control"): the command runs on the device's sources, its
+-- result takes the page's place like the seal key's phrase (not the model's answer: the pen over it is no
+-- interruption); a command without a result (the screen shows it) lets the queue go on
+function Diary:runControl(q)
+    local text, note = control.run(q.sign, self:controlSources())
+    logger.info("riddle: control " .. q.sign .. " " .. tostring(note))
+    if text then
+        self:revealAnswer(text, q.top, nil, "control", nil, q.page)
+    else
+        self:nextAnswer()
+    end
+end
+
+-- the device's sources for riddle.control (tests replace them). The light: KOReader's own step
+-- (DeviceListener:onSetFlIntensity): 0 turns it off, else setIntensity; the resume state follows. On PW2 the scale is
+-- 0..25 (powerd.fl_max)
+function Diary:controlSources()
+    local dev = {}
+    if Device:hasFrontlight() then
+        local pd = Device:getPowerDevice()
+        dev.light = {
+            max = pd.fl_max,
+            get = function() return pd:frontlightIntensity() end,
+            set = function(n)
+                if n <= 0 then pd:turnOffFrontlight() else pd:setIntensity(n) end
+                pd:updateResumeFrontlightState()
+            end,
+        }
+    end
+    return dev
 end
 
 -- a mode's turn in the queue (kind: "map" | "status"): right away when no answer is on its way, else behind that
