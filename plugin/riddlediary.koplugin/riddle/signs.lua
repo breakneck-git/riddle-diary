@@ -12,7 +12,7 @@ local shapes = require("riddle.sign_shapes")
 local signs = {}
 
 -- знаки в порядке строки лога; у каждого — шаблоны в sign_shapes и команда в riddle.control
-signs.LIST = { "up", "down" }
+signs.LIST = { "up", "down", "moon", "square", "bolt" }
 -- критерии лога devmode (Diary:isSign) — доля порога по каждому знаку
 signs.CRITERIA = signs.LIST
 -- ближайший шаблон не дальше — знак

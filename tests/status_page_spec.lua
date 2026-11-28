@@ -184,7 +184,14 @@ local function diary(extra)
     return out
   end
   d.statusSources = function() return healthy() end
-  d.dev = { light = fake_light(5) }
+  local night = { on = false, toggles = 0 }
+  night.get = function() return night.on end
+  night.toggle = function() night.toggles = night.toggles + 1; night.on = not night.on end
+  local wifi = { on = true, sets = {} }
+  wifi.get = function() return wifi.on end
+  wifi.set = function(v) wifi.sets[#wifi.sets + 1] = v end
+  d.refreshes = 0
+  d.dev = { light = fake_light(5), night = night, wifi = wifi, refresh = function() d.refreshes = d.refreshes + 1 end }
   d.controlSources = function() return d.dev end
   d.controller.seal.open = false
   return d
@@ -511,7 +518,7 @@ function T.test_devmode_all_signs_one_file()
   local d = diary()
   d.devmode, d.rose_dir = true, tmpdir()
   d.controller.seal.open = true
-  page_done(d, strokes_of(TF, "square"))
+  page_done(d, strokes_of(TF, "pentagon")) -- квадрат — знак управления, пятиугольник — ни один знак
   t.eq(count("riddle: triangle no"), 1, table.concat(LOG, "\n"))
   t.eq(count("riddle: sign no"), 1)
   t.eq(count("riddle: rose no"), 1)
@@ -531,7 +538,7 @@ function T.test_devmode_closed_seal_records_only_triangle()
     return #files(d.rose_dir)
   end
   t.eq(attempt(false, "letter_a"), 0, "закрытая печать, буква из двух штрихов — файла нет")
-  t.eq(attempt(false, "square"), 0, "закрытая печать, квадрат одним штрихом — файла нет")
+  t.eq(attempt(false, "pentagon"), 0, "закрытая печать, пятиугольник одним штрихом — файла нет")
   t.eq(count("riddle: triangle no"), 1, "оценка в журнале остаётся: " .. table.concat(LOG, "\n"))
   t.eq(attempt(false, "equilateral"), 1, "закрытая печать, треугольник — файл есть")
   t.eq(attempt(true, "letter_a"), 1, "открытая печать, не треугольник — файл есть, как раньше")
@@ -1145,6 +1152,81 @@ function T.test_sleep_drops_queued_control()
   run(120)
   t.eq(#d.dev.light.sets, 0, "команда не выполнена")
   t.eq(count("riddle: control"), 0)
+end
+
+-- полумесяц, квадрат, молния на странице — по одной команде; квадрат без текста, и очередь идёт дальше
+function T.test_moon_toggles_night_mode()
+  local d = diary()
+  page_done(d, dissolved(shapes.moon[1]))
+  run(1)
+  t.eq(d.dev.night.toggles, 1)
+  t.eq(d.revealed[#d.revealed], "Ночной режим включён")
+  t.eq(not_probe(d), 0)
+end
+
+function T.test_bolt_turns_wifi_off()
+  local d = diary()
+  page_done(d, dissolved(shapes.bolt[1]))
+  run(1)
+  t.eq(#d.dev.wifi.sets, 1)
+  t.eq(d.dev.wifi.sets[1], false)
+  t.eq(d.revealed[#d.revealed], "Wi‑Fi выключен")
+end
+
+function T.test_square_refreshes_silently_queue_goes_on()
+  local d = diary()
+  page_done(d, dissolved(shapes.square[1]))
+  run(1)
+  t.eq(d.refreshes, 1, "полное обновление")
+  t.eq(#d.revealed, 0, "текста нет")
+  t.eq(count("riddle: control square refresh"), 1, table.concat(LOG, "\n"))
+  page_done(d) -- страница со словами
+  t.eq(not_probe(d), 1, "следующая страница — в модель")
+end
+
+-- настоящие источники виджета: Wi‑Fi «включён» — по net.state (одно место, знающее NetworkMgr), включение и
+-- выключение — путями KOReader без окон (план D9, D10); ночной режим — событием KOReader
+function T.test_device_sources_wifi_and_night()
+  local Device = require("device")
+  local UI = require("ui/uimanager")
+  local net = require("riddle.net")
+  local calls, events = {}, {}
+  local mgr = {
+    restoreWifiAsync = function() calls[#calls + 1] = "restore" end,
+    scheduleConnectivityCheck = function() calls[#calls + 1] = "check" end,
+    disableWifi = function(_, cb, interactive) calls[#calls + 1] = "disable " .. tostring(cb) .. " " .. tostring(interactive) end,
+    isWifiOn = function() error("знак не спрашивает NetworkMgr сам") end,
+  }
+  local saved = { net.state, package.loaded["ui/network/manager"], package.loaded["ui/event"], G_reader_settings }
+  Device.hasFrontlight = function() return false end
+  Device.hasWifiToggle = function() return true end
+  package.loaded["ui/network/manager"] = mgr
+  package.loaded["ui/event"] = { new = function(_, name) return { name = name } end }
+  UI.broadcastEvent = function(_, ev) events[#events + 1] = ev.name end
+  local night = false
+  G_reader_settings = { isTrue = function(_, key) return key == "night_mode" and night end }
+  local ok, err = pcall(function()
+    local dev = Diary.controlSources(diary())
+    t.eq(dev.light, nil, "подсветки нет — источника нет")
+    for state, want in pairs({ up = true, down = true, off = false }) do
+      net.state = function() return state end
+      t.eq(dev.wifi.get(), want, "net.state " .. state)
+    end
+    dev.wifi.set(true)
+    t.eq(table.concat(calls, ","), "restore,check")
+    dev.wifi.set(false)
+    t.eq(calls[3], "disable nil true")
+    t.eq(dev.night.get(), false)
+    night = true
+    t.eq(dev.night.get(), true)
+    dev.night.toggle()
+    t.eq(events[1], "ToggleNightMode")
+    t.eq(type(dev.refresh), "function")
+  end)
+  net.state, package.loaded["ui/network/manager"], package.loaded["ui/event"], G_reader_settings =
+    saved[1], saved[2], saved[3], saved[4]
+  Device.hasFrontlight, Device.hasWifiToggle, UI.broadcastEvent = nil, nil, nil
+  t.ok(ok, tostring(err))
 end
 
 t.run(T)

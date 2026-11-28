@@ -2,6 +2,9 @@
 -- короткий текст на месте страницы (без итога владелец не видит, что знак понят). Чистые функции: устройство —
 -- внедрёнными источниками dev (виджет: Diary:controlSources; тесты — поддельные):
 --   dev.light = { get = fn() -> уровень, set = fn(уровень), max = верх шкалы }  (уровень 0 — выключена)
+--   dev.night = { get = fn() -> включён ли ночной режим, toggle = fn() }
+--   dev.wifi = { get = fn() -> включён ли Wi‑Fi, set = fn(вкл) }
+--   dev.refresh = fn()  — полное обновление экрана
 -- Источника нет или он бросил ошибку — итог «Не вышло.», причина — в заметке для лога.
 local texts = require("riddle.texts")
 
@@ -29,6 +32,25 @@ end
 control.COMMANDS = {
   up = function(dev) return light_step(dev, 1) end,
   down = function(dev) return light_step(dev, -1) end,
+  moon = function(dev)
+    local n = dev.night
+    if not n then return nil, "no source" end
+    n.toggle()
+    local on = n.get()
+    return on and texts.control_night_on or texts.control_night_off, on and "night on" or "night off"
+  end,
+  square = function(dev)
+    if not dev.refresh then return nil, "no source" end
+    dev.refresh()
+    return nil, "refresh"
+  end,
+  bolt = function(dev)
+    local w = dev.wifi
+    if not w then return nil, "no source" end
+    local on = w.get()
+    w.set(not on)
+    return on and texts.control_wifi_off or texts.control_wifi_on, on and "wifi on->off" or "wifi off->on"
+  end,
 }
 
 -- знак, источники -> итог | nil, заметка для лога («light 5->10», «no source», «error: …»)

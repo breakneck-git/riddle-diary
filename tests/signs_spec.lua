@@ -1,58 +1,22 @@
 -- Знаки управления Kindle (спека 2026-11-28-control-signs, подход А): riddle.signs узнаёт знак по вшитым шаблонам
 -- (riddle.sign_shapes) тем же glyph.match, что и ключ печати, со своим порогом и своими воротами размера.
--- Ложное срабатывание хуже пропуска.
+-- Ложное срабатывание хуже пропуска. Матрица коллизий — по signs.LIST: новый знак попадает в неё сам.
 local t = require("t")
+local glyph = require("riddle.glyph")
 local signs = require("riddle.signs")
 local shapes = require("riddle.sign_shapes")
 local control = require("riddle.control")
+local V = require("sign_variants")
+local R = require("fixtures.rose_strokes")
+local TR = require("fixtures.triangle_strokes")
+local O = require("fixtures.rose_owner")
 
 local T = {}
 
--- рисунок, повёрнутый на deg градусов и растянутый в k раз около центра его рамки, сдвинутый на (dx, dy)
-local function moved(strokes, deg, k, dx, dy)
-  local x0, y0, x1, y1 = math.huge, math.huge, -math.huge, -math.huge
-  for _, s in ipairs(strokes) do
-    for j = 1, #s.p, 2 do
-      x0, x1 = math.min(x0, s.p[j]), math.max(x1, s.p[j])
-      y0, y1 = math.min(y0, s.p[j + 1]), math.max(y1, s.p[j + 1])
-    end
-  end
-  local cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
-  local c, sn = math.cos(math.rad(deg)), math.sin(math.rad(deg))
-  local out = {}
-  for i, s in ipairs(strokes) do
-    local p = {}
-    for j = 1, #s.p, 2 do
-      local x, y = s.p[j] - cx, s.p[j + 1] - cy
-      p[j], p[j + 1] = cx + k * (x * c - y * sn) + dx, cy + k * (x * sn + y * c) + dy
-    end
-    out[i] = { p = p }
-  end
-  return out
-end
+local OPTS = { dist = signs.DIST, size = signs.SIZE }
 
--- обратный порядок штрихов и обратное направление каждого
-local function reversed(strokes)
-  local out = {}
-  for i = #strokes, 1, -1 do
-    local p, s = {}, strokes[i].p
-    for j = #s - 1, 1, -2 do p[#p + 1], p[#p + 2] = s[j], s[j + 1] end
-    out[#out + 1] = { p = p }
-  end
-  return out
-end
-
--- свои варианты шаблона: другое место, размер, наклон руки, порядок и направление штрихов
-local function variants(d)
-  return {
-    shift = moved(d, 0, 1, 120, -90),
-    small = moved(d, 0, 0.7, 0, 0),
-    big = moved(d, 0, 1.3, 0, 0),
-    tilt_left = moved(d, -10, 1, 0, 0),
-    tilt_right = moved(d, 10, 1, 0, 0),
-    backwards = reversed(d),
-  }
-end
+-- рисунки фикстур, которые сами — знак управления (не коллизия): квадрат одним штрихом из фикстур треугольника
+local ALIKE = { ["triangle_strokes.square"] = "square" }
 
 -- таблица знаков — одна: у каждого знака списка есть шаблоны и команда, лишних нет ни там, ни там
 function T.test_shapes_cover_list()
@@ -65,15 +29,33 @@ function T.test_shapes_cover_list()
   for name in pairs(shapes) do t.ok(listed[name], "шаблон без знака в списке: " .. name) end
   for name in pairs(control.COMMANDS) do t.ok(listed[name], "команда без знака в списке: " .. name) end
   t.eq(signs.CRITERIA, signs.LIST, "критерии лога — знаки списка")
+  for _, name in ipairs({ "up", "down", "moon", "square", "bolt" }) do t.ok(listed[name], "знак спеки " .. name) end
 end
 
 function T.test_detect_own_variants()
   for _, name in ipairs(signs.LIST) do
     for i, d in ipairs(shapes[name]) do
       t.eq((signs.detect(d)), name, name .. " шаблон " .. i .. " как есть")
-      for v, strokes in pairs(variants(d)) do
+      for v, strokes in pairs(V.of(name, d)) do
         local got, score = signs.detect(strokes)
         t.eq(got, name, string.format("%s шаблон %d вариант %s (score=%.2f)", name, i, v, score))
+      end
+    end
+  end
+end
+
+-- ни один шаблон не совпадает с шаблонами другого знака, ни один вариант не узнаётся чужим знаком
+function T.test_signs_never_match_each_other()
+  for _, a in ipairs(signs.LIST) do
+    for i, d in ipairs(shapes[a]) do
+      for _, b in ipairs(signs.LIST) do
+        if b ~= a then
+          local ok, dist = glyph.match(d, shapes[b], OPTS)
+          t.eq(ok, false, string.format("%s %d против шаблонов %s: %.2f", a, i, b, dist))
+          for v, strokes in pairs(V.of(a, d)) do
+            t.ok(signs.detect(strokes) ~= b, a .. " " .. i .. " " .. v .. " узнан как " .. b)
+          end
+        end
       end
     end
   end
@@ -83,11 +65,58 @@ end
 function T.test_up_down_not_swapped()
   for _, pair in ipairs({ { "up", "down" }, { "down", "up" } }) do
     for i, d in ipairs(shapes[pair[1]]) do
-      for v, strokes in pairs(variants(d)) do
+      for v, strokes in pairs(V.of(pair[1], d)) do
         t.ok(signs.detect(strokes) ~= pair[2], pair[1] .. " " .. i .. " " .. v .. " узнан как " .. pair[2])
       end
     end
   end
+end
+
+-- обязательная пара спеки: стрелка в один штрих против молнии (на синтетике 2.94 и 3.06 — ниже порога ключа)
+function T.test_one_stroke_arrows_not_bolt()
+  local n = 0
+  for _, name in ipairs({ "up", "down" }) do
+    for i, d in ipairs(shapes[name]) do
+      if #d == 1 then
+        n = n + 1
+        for v, strokes in pairs(V.of(name, d)) do
+          t.ok(signs.detect(strokes) ~= "bolt", name .. " " .. i .. " " .. v .. " узнан молнией")
+        end
+        local ok, dist = glyph.match(d, shapes.bolt, OPTS)
+        t.eq(ok, false, string.format("%s %d против молнии: %.2f", name, i, dist))
+      end
+    end
+  end
+  t.ok(n >= 2, "есть стрелки в один штрих")
+  for i, d in ipairs(shapes.bolt) do
+    for v, strokes in pairs(V.of("bolt", d)) do
+      local got = signs.detect(strokes)
+      t.ok(got ~= "up" and got ~= "down", "молния " .. i .. " " .. v .. " узнана стрелкой")
+    end
+  end
+end
+
+-- обязательная пара спеки: одиночный крест розы против ↓ (на синтетике 2.97)
+function T.test_cross_only_not_down()
+  local got, _, why = signs.detect(R.cross_only)
+  t.eq(got, false)
+  t.ok(why.down and why.down > 1, "крест дальше порога от ↓: " .. tostring(why.down))
+end
+
+-- чужие рисунки (фикстуры треугольника, розы, живые розы владельца, буквы и слова) — не знак; квадрат одним штрихом
+-- из фикстур треугольника — знак «квадрат»
+function T.test_fixtures_not_signs()
+  local sets = { triangle_strokes = TR, rose_strokes = R, rose_owner = O }
+  local n = 0
+  for set, mod in pairs(sets) do
+    for name, d in pairs(V.drawings(mod)) do
+      n = n + 1
+      local key = set .. "." .. name
+      local got, score = signs.detect(d)
+      t.eq(got, ALIKE[key] or false, string.format("%s (score=%.2f)", key, score))
+    end
+  end
+  t.ok(n > 80, "фикстур в матрице: " .. n)
 end
 
 -- why — доля порога по каждому знаку, дошедшему до облака: у своего ≤ 1, у чужого > 1

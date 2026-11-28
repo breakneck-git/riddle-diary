@@ -73,4 +73,49 @@ function T.test_run_missing_source()
   t.eq(note, "no source")
 end
 
+-- ночной режим: переключение раз на знак, итог — по состоянию после переключения
+function T.test_moon_toggles_night()
+  local n = { on = false, toggles = 0 }
+  n.get = function() return n.on end
+  n.toggle = function() n.toggles = n.toggles + 1; n.on = not n.on end
+  local text, note = control.run("moon", { night = n })
+  t.eq(text, "Ночной режим включён")
+  t.eq(n.toggles, 1)
+  t.eq(note, "night on")
+  t.eq((control.run("moon", { night = n })), "Ночной режим выключен")
+  t.eq(n.toggles, 2)
+end
+
+-- Wi‑Fi: знак ставит обратное состояние; итог — цель (подключение идёт само, асинхронно)
+function T.test_bolt_flips_wifi()
+  local w = { on = true, sets = {} }
+  w.get = function() return w.on end
+  w.set = function(v) w.sets[#w.sets + 1] = v end
+  local text, note = control.run("bolt", { wifi = w })
+  t.eq(text, "Wi‑Fi выключен")
+  t.eq(w.sets[1], false)
+  t.eq(note, "wifi on->off")
+  w.on = false
+  t.eq((control.run("bolt", { wifi = w })), "Wi‑Fi включён")
+  t.eq(w.sets[2], true)
+end
+
+-- квадрат: полное обновление, текста нет — его итог виден сам
+function T.test_square_refreshes_without_text()
+  local n = 0
+  local text, note = control.run("square", { refresh = function() n = n + 1 end })
+  t.eq(text, nil)
+  t.eq(note, "refresh")
+  t.eq(n, 1)
+end
+
+-- у устройства нет источника знака — итог «Не вышло.», не тишина
+function T.test_missing_sources_each_command()
+  for _, name in ipairs({ "moon", "bolt", "square" }) do
+    local text, note = control.run(name, {})
+    t.eq(text, texts.control_failed, name)
+    t.eq(note, "no source", name)
+  end
+end
+
 t.run(T)

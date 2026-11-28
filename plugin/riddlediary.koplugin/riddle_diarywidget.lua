@@ -1951,9 +1951,36 @@ end
 
 -- the device's sources for riddle.control (tests replace them). The light: KOReader's own step
 -- (DeviceListener:onSetFlIntensity): 0 turns it off, else setIntensity; the resume state follows. On PW2 the scale is
--- 0..25 (powerd.fl_max)
+-- 0..25 (powerd.fl_max). The night mode: KOReader's event (DeviceListener:onToggleNightMode inverts the screen, keeps
+-- the setting and refreshes everything full -- the diary too, paintTo). Wi‑Fi: on or not -- net.state, the one place
+-- that knows NetworkMgr's methods; on -- KOReader's background pair restoreWifiAsync + scheduleConnectivityCheck
+-- (NetworkConnected follows; turnOnWifi would show its scanning popup), off -- disableWifi (events, wifi_was_on).
+-- KOReader modules are required here, not at the top: the widget's specs do not stub them
 function Diary:controlSources()
-    local dev = {}
+    local dev = {
+        night = {
+            get = function() return G_reader_settings:isTrue("night_mode") end,
+            toggle = function()
+                local Event = require("ui/event")
+                UIManager:broadcastEvent(Event:new("ToggleNightMode"))
+            end,
+        },
+        refresh = function() self:push(0, 0, self.w, self.h, "full") end,
+    }
+    if Device:hasWifiToggle() then
+        dev.wifi = {
+            get = function() return net.state() ~= "off" end,
+            set = function(on)
+                local mgr = require("ui/network/manager")
+                if on then
+                    mgr:restoreWifiAsync()
+                    mgr:scheduleConnectivityCheck()
+                else
+                    mgr:disableWifi(nil, true)
+                end
+            end,
+        }
+    end
     if Device:hasFrontlight() then
         local pd = Device:getPowerDevice()
         dev.light = {

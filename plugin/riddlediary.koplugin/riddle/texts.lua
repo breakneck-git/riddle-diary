@@ -304,10 +304,14 @@ texts.key_retry = "Не совпало. Нарисуй знак заново."
 texts.key_taken = "Этот знак занят."
 texts.key_bigger = "Крупнее."
 
--- итоги знаков управления (riddle.control): подсветка — уровень и верх шкалы устройства; команда не вышла (источника
--- нет или он упал)
+-- итоги знаков управления (riddle.control): подсветка — уровень и верх шкалы устройства; ночной режим; Wi‑Fi — цель
+-- (подключение идёт само); команда не вышла (источника нет или он упал)
 texts.control_light = "Подсветка %d из %d"
 texts.control_light_off = "Подсветка выключена"
+texts.control_night_on = "Ночной режим включён"
+texts.control_night_off = "Ночной режим выключен"
+texts.control_wifi_on = "Wi‑Fi включён"
+texts.control_wifi_off = "Wi‑Fi выключен"
 texts.control_failed = "Не вышло."
 
 -- запись не разобрана (read == "?")
