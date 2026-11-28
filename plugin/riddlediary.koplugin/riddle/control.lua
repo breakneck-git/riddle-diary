@@ -24,8 +24,10 @@ local function light_step(dev, dir)
   local cur = l.get()
   local new = control.light(cur, l.max, dir)
   l.set(new)
-  local text = new > 0 and string.format(texts.control_light, new, l.max) or texts.control_light_off
-  return text, string.format("light %d->%d", cur, new)
+  -- итог — по уровню после установки: устройство не послушалось — так и видно, не ложный шаг
+  local now = l.get()
+  local text = now > 0 and string.format(texts.control_light, now, l.max) or texts.control_light_off
+  return text, string.format("light %d->%d", cur, now)
 end
 
 -- знак -> команда: function(dev) -> итог | nil (итог виден сам), заметка для лога | nil, "no source"

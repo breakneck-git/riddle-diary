@@ -1229,4 +1229,89 @@ function T.test_device_sources_wifi_and_night()
   t.ok(ok, tostring(err))
 end
 
+-- перо поверх итога знака — не перебивание: итог знака не ответ модели (kind "control")
+function T.test_pen_over_control_result_no_interjection()
+  local d = diary()
+  page_done(d, dissolved(UP))
+  run(0)
+  t.eq(d.answer and d.answer.kind, "control", "итог знака проявляется")
+  t.eq(d.answer.phase, "reveal")
+  d.page = { strokes = {}, ink = { 10, 200, 100, 260 } }
+  d:hurryAnswer()
+  t.ok(not d.page.interrupted, "страница не помечена перебитой")
+  d:onPageDone()
+  for _, q in ipairs(d.queue) do t.ok(q.kind ~= "interject", "реплики на перебивание нет") end
+end
+
+-- порядок на странице, узнанной и треугольником (розой), и знаком: знак подменён «узнаёт всё»
+local function signs_take_all(fn)
+  local signs = require("riddle.signs")
+  local detect = signs.detect
+  signs.detect = function() return "up", 0, { up = 0 } end
+  local ok, err = pcall(fn)
+  signs.detect = detect
+  t.ok(ok, tostring(err))
+end
+
+function T.test_triangle_wins_over_sign()
+  signs_take_all(function()
+    local d = diary()
+    page_done(d, strokes_of(TF, "equilateral"))
+    run(1)
+    t.ok(d.status, "треугольник раньше знака")
+    t.eq(#d.dev.light.sets, 0)
+  end)
+end
+
+function T.test_sign_wins_over_rose()
+  signs_take_all(function()
+    local d = diary()
+    d.controller.seal.open = true
+    page_done(d, strokes_of(RF, "rose_ccw"))
+    run(1)
+    t.eq(d.map, nil, "знак раньше розы")
+    t.eq(d.dev.light.sets[1], 10)
+  end)
+end
+
+-- источники устройства упали: итог «Не вышло.», причина в логе, дневник жив
+function T.test_control_sources_error_visible()
+  local d = diary()
+  d.controlSources = function() error("powerd gone") end
+  page_done(d, dissolved(UP))
+  run(1)
+  t.eq(d.revealed[#d.revealed], "Не вышло.")
+  t.eq(count("riddle: control up error:"), 1, table.concat(LOG, "\n"))
+  t.eq(count("powerd gone"), 1)
+end
+
+-- настоящий источник подсветки: шкала и уровень — powerd, установка — событием KOReader SetFlIntensity
+-- (DeviceListener:onSetFlIntensity: выключение при 0, setIntensity, состояние для пробуждения), не копией его тела
+function T.test_device_source_light_via_event()
+  local Device = require("device")
+  local UI = require("ui/uimanager")
+  local events = {}
+  local pd = { fl_max = 25, level = 7 }
+  function pd:frontlightIntensity() return self.level end
+  local saved = package.loaded["ui/event"]
+  Device.hasFrontlight = function() return true end
+  Device.hasWifiToggle = function() return false end
+  Device.getPowerDevice = function() return pd end
+  package.loaded["ui/event"] = { new = function(_, name, ...) return { name = name, args = { ... } } end }
+  UI.broadcastEvent = function(_, ev) events[#events + 1] = ev end
+  local ok, err = pcall(function()
+    local dev = Diary.controlSources(diary())
+    t.eq(dev.light.max, 25)
+    t.eq(dev.light.get(), 7)
+    dev.light.set(10)
+    t.eq(#events, 1)
+    t.eq(events[1].name, "SetFlIntensity")
+    t.eq(events[1].args[1], 10)
+    t.eq(dev.wifi, nil, "Wi‑Fi нет — источника нет")
+  end)
+  package.loaded["ui/event"] = saved
+  Device.hasFrontlight, Device.hasWifiToggle, Device.getPowerDevice, UI.broadcastEvent = nil, nil, nil, nil
+  t.ok(ok, tostring(err))
+end
+
 t.run(T)

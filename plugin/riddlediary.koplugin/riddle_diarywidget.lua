@@ -1940,7 +1940,14 @@ end
 -- result takes the page's place like the seal key's phrase (not the model's answer: the pen over it is no
 -- interruption); a command without a result (the screen shows it) lets the queue go on
 function Diary:runControl(q)
-    local text, note = control.run(q.sign, self:controlSources())
+    -- the sources themselves may fail (Device, powerd): the result is still visible, the cause goes to the log
+    local ok, dev = pcall(self.controlSources, self)
+    local text, note
+    if ok then
+        text, note = control.run(q.sign, dev)
+    else
+        text, note = texts.control_failed, "error: " .. tostring(dev)
+    end
     logger.info("riddle: control " .. q.sign .. " " .. tostring(note))
     if text then
         self:revealAnswer(text, q.top, nil, "control", nil, q.page)
@@ -1949,9 +1956,9 @@ function Diary:runControl(q)
     end
 end
 
--- the device's sources for riddle.control (tests replace them). The light: KOReader's own step
--- (DeviceListener:onSetFlIntensity): 0 turns it off, else setIntensity; the resume state follows. On PW2 the scale is
--- 0..25 (powerd.fl_max). The night mode: KOReader's event (DeviceListener:onToggleNightMode inverts the screen, keeps
+-- the device's sources for riddle.control (tests replace them). The light: the level and the scale are powerd's (PW2:
+-- 0..25, powerd.fl_max); a new level goes by KOReader's event SetFlIntensity (DeviceListener:onSetFlIntensity: 0 turns
+-- it off, else setIntensity; the resume state follows) -- its path, not a copy of it. The night mode: KOReader's event (DeviceListener:onToggleNightMode inverts the screen, keeps
 -- the setting and refreshes everything full -- the diary too, paintTo). Wi‑Fi: on or not -- net.state, the one place
 -- that knows NetworkMgr's methods; on -- KOReader's background pair restoreWifiAsync + scheduleConnectivityCheck
 -- (NetworkConnected follows; turnOnWifi would show its scanning popup), off -- disableWifi (events, wifi_was_on).
@@ -1987,8 +1994,8 @@ function Diary:controlSources()
             max = pd.fl_max,
             get = function() return pd:frontlightIntensity() end,
             set = function(n)
-                if n <= 0 then pd:turnOffFrontlight() else pd:setIntensity(n) end
-                pd:updateResumeFrontlightState()
+                local Event = require("ui/event")
+                UIManager:broadcastEvent(Event:new("SetFlIntensity", n))
             end,
         }
     end

@@ -38,6 +38,16 @@ function T.test_run_up_sets_and_reports()
   t.ok(note:find("light 5->10", 1, true), note)
 end
 
+-- итог — по уровню после установки: устройство не послушалось — правда, не ложное «10 из 25»
+function T.test_run_reports_level_after_set()
+  local l = light(5)
+  l.set = function(n) l.sets[#l.sets + 1] = n end -- уровень не меняется
+  local text, note = control.run("up", { light = l })
+  t.eq(l.sets[1], 10, "просили 10")
+  t.eq(text, "Подсветка 5 из 25")
+  t.ok(note:find("light 5->5", 1, true), note)
+end
+
 -- на максимуме ↑ ничего не меняет, но итог виден
 function T.test_run_up_at_max_still_visible()
   t.eq((control.run("up", { light = light(25) })), "Подсветка 25 из 25")
