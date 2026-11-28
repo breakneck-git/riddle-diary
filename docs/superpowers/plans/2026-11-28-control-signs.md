@@ -36,6 +36,8 @@
 | K7 | `hold.seconds`: всё, кроме `"think"`, держится как ответ | `riddle/hold.lua:15-23` |
 | K8 | Полное обновление дневника — `self:push(0, 0, self.w, self.h, "full")`; `paintTo` блитит холст — `setDirty("all","full")` перерисует дневник целиком | `riddle_diarywidget.lua:2072, 2156, 698-700` |
 | K9 | Источники устройства в виджете — методами, тесты их подменяют (`traySources`, `statusSources`) | `riddle_diarywidget.lua:1018, 2085` |
+| K18 | «Включён ли канал связи» знает только `net.state()` (`net.CHANNELS` — методы NetworkMgr); его читают `traySources` и `statusSources` | `riddle/net.lua:7-28`; `riddle_diarywidget.lua:1019, 2091` |
+| K19 | В devmode каждая строка оценки `isSign` несёт `file=` (имя одно — `recordStrokes`); тест «оба знака» ждёт 2 таких строки | `riddle_diarywidget.lua:1896-1902, 1911-1914`; `tests/status_page_spec.lua:499-509` |
 | K10 | `glyph.match(strokes, drawings)`: ворота `count` (1..MAX_STROKES и совместимость по числу штрихов), `size` (меньшая сторона < `glyph.SIZE` = 150), `dist` (> `glyph.DIST` = 3.0) — порог и размер зашиты | `riddle/glyph.lua:185-200, 21, 24` |
 | K11 | `glyph.fits` «занятыми» считает только треугольник и розу; `glyph` требует `riddle.rose`, `riddle.triangle` на верхнем уровне | `riddle/glyph.lua:204-210, 13-15` |
 | K12 | Задание ключа: `glyph.fits` → `texts.key_taken` / `key_bigger` | `riddle/controller.lua:150-152` |
@@ -55,6 +57,9 @@
 | D4 | Ночной режим — `DeviceListener:onToggleNightMode`: `Screen:toggleNightMode()`, `setDirty("all","full")`, `G_reader_settings` `night_mode` | `devicelistener.lua:14-24` |
 | D5 | На PW2 инверсия аппаратная (`setHWNightmode`); в ночном режиме подменяется только partial-волна, быстрые A2/DU пера не трогаются | `ffi/framebuffer.lua:476-490`; `ffi/framebuffer_mxcfb.lua:389-411, 89-91` |
 | D6 | `NetworkMgr:turnOnWifi` на Kindle → `reconnectOrShowNetworkMenu`, который показывает `InfoMessage` «Scanning for networks…»; `restoreWifiAsync` — только `kindleEnableWifi(1)`; `turnOffWifi` — `kindleEnableWifi(0)` | `kindle/device.lua:375-378, 389-394, 401-403`; `ui/network/manager.lua:1060-1063` |
+| D9 | Пара KOReader для включения в фоне: `restoreWifiAsync()` + `scheduleConnectivityCheck()`; проверка связи шлёт `NetworkConnected` (его ловит прогрев DNS дневника), сдаётся через 180 × 0.25 с через `_abortWifiConnection` без окна (окно только при `widget`) | `ui/network/manager.lua:74-95, 121-124, 143-146`; `ui/network/networklistener.lua:221-224`; `main.lua:474-482` |
+| D10 | Выключение по-KOReader: `NetworkMgr:disableWifi(cb, interactive)` — события `NetworkDisconnecting/Disconnected`, снимает проверку связи, при `interactive` пишет `wifi_was_on = false` (сон не вернёт Wi‑Fi сам); окна нет (окно — у `toggleWifiOff`) | `ui/network/manager.lua:370-395, 411-420` |
+| D11 | Kindle `setIntensityHW` в конце зовёт `_decideFrontlightState()` → `is_fl_on` по железу: из выключенной `setIntensity(5)` → `frontlightIntensity() == 5`, следующий ↑ — 10 | `device/kindle/powerd.lua:122-153`; `device/generic/powerd.lua:112-115, 126-133` |
 | D7 | Выключение Wi‑Fi рвёт ssh (ssh ходит по `wlan0`) | спека, «Проверенные факты» |
 | D8 | В `/mnt/us/riddle/roses` 115 старых файлов (последний 2026-11-20); фикс «попытка ключа не пишется» — 87e4bbb от 2026-11-25 → старые файлы могут нести попытки ключа | `ls /mnt/us/riddle/roses`; `git log -1 87e4bbb` |
 
@@ -76,10 +81,9 @@
 ## ASSUMPTION (снимаются в срезе 5, живой прогон)
 
 1. Аппаратная инверсия накрывает экран дневника (он пишет в `Screen.bb` мимо UIManager), чернила A2 видны в ночном режиме, `ToggleNightMode` через `UIManager:broadcastEvent` доходит до `DeviceListener`, пока дневник открыт (D4, D5 — код; вживую не видели).
-2. Wi‑Fi через `restoreWifiAsync` сам подключается к известной сети, без всплывающих окон (D6 — окна нет по коду; переподключение — вживую).
+2. Wi‑Fi через `restoreWifiAsync` + `scheduleConnectivityCheck` сам подключается к известной сети и шлёт `NetworkConnected` (D9 — по коду; окна нет по коду; само подключение и прогрев DNS — вживую).
 3. Пороги и шаблоны по живым рисункам владельца дают зазор «свои < порог < чужие» ≥ 0.4 (срез 3).
-4. Свет из выключенного: после `setIntensity(5)` `frontlightIntensity()` возвращает 5, следующий ↑ даёт 10 (рецепт D2 — путь самого KOReader; `is_fl_on` после `setIntensity` не перепроверен: Kindle ушёл из сети посреди сверки).
-5. Ключ печати владельца не похож ни на один из пяти знаков (образец читать нельзя): иначе этот знак не сработает никогда — ключ проверяется первым. Вопрос владельцу.
+4. Ключ печати владельца не похож ни на один из пяти знаков (образец читать нельзя): иначе этот знак не сработает никогда — ключ проверяется первым. Вопрос владельцу.
 
 ## Review Focus
 
@@ -143,6 +147,7 @@ end
   - `test_triangle_before_sign` (`TF.equilateral` → статус, `sets` пуст) и `test_key_before_sign` (ключевая печать `keyed_diary`, страница `O.owner_03` → печать открыта, `sets` пуст).
   - `test_sign_under_keyed_closed_seal_no_file`: devmode, `keyed_diary`, страница-↑ → команда выполнена, `#files(rose_dir) == 0`, `count("riddle: sign yes") == 1`.
   - `test_sign_over_answer_no_interjection`, `test_sign_during_inflight`, `test_sleep_drops_queued_control` — по Review Focus 1, 4, 5.
+  - Старый `test_devmode_both_signs_one_file` (K19) ломается законно: страницу `TF.square` под открытой печатью теперь проверяют три знака. Переименовать в `test_devmode_all_signs_one_file`, добавить `count("riddle: sign no") == 1`, ожидание `count("file=" .. names[1])` — 3.
 - [ ] **Step 5: прогнать новые тесты — падают** (`luajit` через `LUA_PATH` из `tests/run.sh`): нет `riddle.signs`, `riddle.control`, `opts` не читается.
 - [ ] **Step 6: `glyph.match(strokes, drawings, opts)`** — `opts.size` в воротах `size` (`:188`), `opts.dist` в `:198`; комментарий над функцией — про параметр.
 - [ ] **Step 7: `sign_shapes.lua`** — синтетические шаблоны (вершины ломаной, экранные px; заменятся рисунками владельца в Task 3):
@@ -151,7 +156,7 @@ end
 - [ ] **Step 8: `signs.lua`** — `detect` сверяет по каждому имени `glyph.match(strokes, sign_shapes[name], { dist = signs.DIST, size = signs.SIZE })` и берёт ближайший совпавший; заголовок модуля — зачем свой порог (M2–M4).
 - [ ] **Step 9: `control.lua` и тексты** — `texts.control_light = "Подсветка %d из %d"`, `control_light_off = "Подсветка выключена"`, `control_failed = "Не вышло."`. `run` вызывает команду под `pcall`; источника нет — `control_failed`, `"no source"`.
 - [ ] **Step 10: виджет.** После треугольника (`:1472`): `local sign = self:isSign(signs, "sign", pg.strokes, record)` → в очередь `{ kind = "control", sign = sign, top = top, page = pg }`, `self:nextAnswer()`, `return`. В `nextAnswer` после `table.remove` (`:1672`): `if q.kind == "control" then return self:runControl(q) end`. `runControl`: `control.run(q.sign, self:controlSources())`, строка `riddle: control <name> <note>` (всегда, без координат), текст есть → `revealAnswer(text, q.top, nil, "control", nil, q.page)`, нет → `nextAnswer()`. `controlSources`: `light` — только при `Device:hasFrontlight()`, `get` — `powerd:frontlightIntensity()`, `max` — `powerd.fl_max`, `set` — рецепт D2 дословно. `require` KOReader-модулей (`ui/event`, `ui/network/manager`) — внутри `controlSources`, не на верхнем уровне: 18 спеков виджета их не стабят.
-- [ ] **Step 11: `sh tests/run.sh`** → `76+ specs, OK` (новые спеки зелёные, старые не сломаны).
+- [ ] **Step 11: `sh tests/run.sh`** → `77 specs, OK` (два новых спека; из старых меняется только ожидание K19 — Step 4).
 - [ ] **Step 12: коммит** `feat(signs): каркас знаков управления, подсветка ↑/↓`.
 
 ### Task 2: Полумесяц, квадрат, молния и матрица коллизий (≈300 строк)
@@ -173,10 +178,10 @@ end
   - `test_cross_only_not_down` (обязательный): `signs.detect(R.cross_only) == false`, расстояние до `down` > `signs.DIST` (M3);
   - `test_triangles_not_signs`: все рисунки `fixtures.triangle_strokes`, кроме `square`, → `false`; `TF.square` → `"square"` (M5);
   - `test_roses_and_letters_not_signs`: все рисунки `fixtures.rose_strokes` (`ROSES`, `NON_ROSES`, буквы, слова) и `fixtures.rose_owner` → `false`.
-- [ ] **Step 3: тесты виджета**: полумесяц, квадрат, молния на странице — `dev.night.toggle`/`dev.refresh`/`dev.wifi.set` вызваны по разу, тексты по Global Constraints, квадрат не печатает ничего и очередь идёт дальше (следующая страница со словами уходит в модель). Два старых теста с `TF.square` на странице (K15) переписать на `TF.pentagon` — квадрат стал знаком; ожидания в них не меняются.
+- [ ] **Step 3: тесты виджета**: полумесяц, квадрат, молния на странице — `dev.night.toggle`/`dev.refresh`/`dev.wifi.set` вызваны по разу, тексты по Global Constraints, квадрат не печатает ничего и очередь идёт дальше (следующая страница со словами уходит в модель). Источник `wifi` настоящего `controlSources` — `test_wifi_source_via_net_and_networkmgr`: `ui/network/manager` подменён в `package.preload` (журнал вызовов), `net.state` подменён → `get()` == (`net.state() ~= "off"`); `set(true)` → `restoreWifiAsync`, `scheduleConnectivityCheck`; `set(false)` → `disableWifi(nil, true)`; `isWifiOn` знаком не вызывается напрямую. Два старых теста с `TF.square` на странице (K15) переписать на `TF.pentagon` — квадрат стал знаком; ожидания — как после Task 1 (`all_signs`: строки `triangle no`, `sign no`, `rose no`, `file=` — 3; закрытая печать — файла нет).
 - [ ] **Step 4: прогнать — падают.**
 - [ ] **Step 5: шаблоны** (1 штрих каждый): `square` — `{200,300 → 550,300 → 550,650 → 200,650 → 200,300}`; `bolt` — `{460,250 → 320,480 → 440,480 → 300,750}`; `moon` — внешняя дуга центр (380,500), r 200, от −110° до 110° с шагом 10°, затем внутренняя центр (300,500), r 150, от 70° до −70°.
-- [ ] **Step 6: команды и источники.** `night`: `get` — `G_reader_settings:isTrue("night_mode")`, `toggle` — `UIManager:broadcastEvent(Event:new("ToggleNightMode"))` (D4: перерисовка full — его). `wifi`: только при `Device:hasWifiToggle()`; `get` — `NetworkMgr:isWifiOn()`, `set(true)` — `NetworkMgr:restoreWifiAsync()` (не `turnOnWifi`: D6, окно «Scanning…»), `set(false)` — `NetworkMgr:turnOffWifi()`. `refresh` — `self:push(0, 0, self.w, self.h, "full")`.
+- [ ] **Step 6: команды и источники.** `night`: `get` — `G_reader_settings:isTrue("night_mode")`, `toggle` — `UIManager:broadcastEvent(Event:new("ToggleNightMode"))` (D4: перерисовка full — его). `wifi`: только при `Device:hasWifiToggle()`; `get` — `net.state() ~= "off"` (K18: методы NetworkMgr знает только `net`, новый канал попадёт в знак сам); `set(true)` — `NetworkMgr:restoreWifiAsync()` и `NetworkMgr:scheduleConnectivityCheck()` (D9: пара KOReader, `NetworkConnected` → прогрев DNS; не `turnOnWifi` — D6, окно «Scanning…»); `set(false)` — `NetworkMgr:disableWifi(nil, true)` (D10). `refresh` — `self:push(0, 0, self.w, self.h, "full")`.
 - [ ] **Step 7: `tools/sign_matrix.lua`** — запуск `LUA_PATH="plugin/riddlediary.koplugin/?.lua;tests/?.lua;;" luajit tools/sign_matrix.lua fixtures.rose_strokes fixtures.triangle_strokes fixtures.rose_owner`; печатает таблицу; на синтетике зазор каждого знака > 0.
 - [ ] **Step 8: `sh tests/run.sh`** → OK.
 - [ ] **Step 9: коммит** `feat(signs): ночной режим, полное обновление, Wi‑Fi; матрица коллизий`.
@@ -197,6 +202,8 @@ end
   2. чужие, крупно, по разу: Л, V, Z, N, С, О, П, Т, Г, 1, 7, 4.
 
   Итого 72 страницы, ~10 мин. Записать время начала. Сбилась — назвать номер страницы.
+
+  **Побочный эффект — сказать владельцу до записи:** под открытой печатью страница, не узнанная знаком, уходит модели и в память персонажа (K1: после розы — модель). На текущей сборке это все 72 страницы, включая 12 «чужих» букв, — как при калибровке роз. Нет согласия владельца — запись не начинать.
 - [ ] **Step 2: забрать файлы** (только чтение): `ssh kindle 'ls /mnt/us/riddle/roses'`, `scp` только имён с меткой времени не раньше начала записи (D8: старые не трогать). Сверить число (72) и каждый глазом по отрисовке, как `rose_owner.lua:2`.
 - [ ] **Step 3: шаблоны.** По каждому знаку и каждому числу штрихов (≥ 4 рисунка, иначе — вопрос владельцу): медоид (наименьшая сумма расстояний до своих) + два «дальних» (каждый следующий — дальше всех от уже взятых) → в `sign_shapes`; остальные → `signs_owner.F.SIGNS`. Синтетические шаблоны уходят.
 - [ ] **Step 4: пороги по `tools/sign_matrix.lua`** на `signs_owner` + фикстурах Task 2. `signs.DIST` = середина между наибольшим «своим» и наименьшим «чужим», округление до 0.05; зазор < 0.4 хоть у одного знака — **стоп**, таблицу оркестратору (решение о новом параметре ворот `glyph` — не здесь). `signs.SIZE` = ⌊0.7 × наименьшая меньшая сторона среди своих⌋, не ниже 60.
@@ -223,16 +230,17 @@ end
 
 Деплой — оркестратор (`tools/deploy.sh --dev`). Лог — `tools/kindle_log.sh`, строки `riddle: sign yes|no`, `riddle: control <name> <note>`.
 
-- [ ] ↑ трижды от выключенной → «Подсветка 5/10/15 из 25», свет виден (ASSUMPTION 4); ↓ четырежды → 10, 5, «выключена», 0.
+- [ ] ↑ трижды от выключенной → «Подсветка 5/10/15 из 25», свет виден (D11 вживую); ↓ четырежды → 10, 5, «выключена», 0.
 - [ ] Полумесяц → экран инвертирован, чернила пера видны и растворяются, итог читается; ещё раз → обратно; закрыть и открыть дневник — режим сохранён (ASSUMPTION 1).
 - [ ] Квадрат → полное обновление, текста нет, следующая страница — обычный разговор.
-- [ ] Молния → «Wi‑Fi выключен» (ssh рвётся — ожидаемо); молния → «Wi‑Fi включён», ни одного окна KOReader; через ≤ 60 с треугольник показывает «Wi‑Fi: на связи» (ASSUMPTION 2).
+- [ ] Молния → «Wi‑Fi выключен» (ssh рвётся — ожидаемо); молния → «Wi‑Fi включён», ни одного окна KOReader; через ≤ 60 с треугольник показывает «Wi‑Fi: на связи», в логе — `riddle: dns warm (network connected): N hosts cached` (`main.lua:373`; ASSUMPTION 2); сон и пробуждение после молнии-«выкл» Wi‑Fi не возвращают (D10).
 - [ ] Закрытая печать с ключом: ↑ работает, число файлов в `roses` до и после одно (K2).
 - [ ] 10 страниц обычного письма (строки слов, подпись, рисунок) — ни одной `riddle: control` (анти-цель).
 - [ ] Итог — оркестратору: что сошлось, строки лога, снятые ASSUMPTION.
 
 ## Вопросы владельцу
 
-1. Шаг подсветки 5 (уровни 5–10–15–20–25, первый ↑ из выключенной — сразу 5)? Нужны ли тусклые 1–4?
-2. Твой ключ печати похож на ↑, ↓, полумесяц, квадрат или молнию? Если да — этот знак не сработает, пока ключ не сменишь.
-3. Когда удобно 10 минут на запись 72 рисунков (Task 3, шаг 1)?
+Шаг подсветки 5 — решено оркестратором (2026-11-28).
+
+1. Твой ключ печати похож на ↑, ↓, полумесяц, квадрат или молнию? Если да — этот знак не сработает, пока ключ не сменишь.
+2. Когда удобно 10 минут на запись 72 рисунков (Task 3, шаг 1)? Все 72 страницы уйдут модели и в память персонажа, как было с розами, — согласен?
