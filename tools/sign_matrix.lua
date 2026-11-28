@@ -11,9 +11,6 @@ local signs = require("riddle.signs")
 local shapes = require("riddle.sign_shapes")
 local V = require("sign_variants")
 
--- фикстуры треугольника: квадрат одним штрихом — сам знак «квадрат»
-local ALIKE = { ["fixtures.triangle_strokes"] = { square = "square" } }
-
 local OPTS = { dist = math.huge, size = signs.SIZE }
 
 local function dist(d, name)
@@ -31,7 +28,7 @@ for _, name in ipairs(signs.LIST) do
 end
 for _, modname in ipairs(arg) do
   local mod = require(modname)
-  local alike = mod.ALIKE or ALIKE[modname] or {}
+  local alike = mod.ALIKE or {}
   for n, d in pairs(V.drawings(mod)) do
     local label = modname:gsub("^fixtures%.", "") .. "." .. n
     if alike[n] then own[alike[n]][label] = d else foreign[label] = d end

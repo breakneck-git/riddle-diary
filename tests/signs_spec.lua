@@ -15,9 +15,6 @@ local T = {}
 
 local OPTS = { dist = signs.DIST, size = signs.SIZE }
 
--- рисунки фикстур, которые сами — знак управления (не коллизия): квадрат одним штрихом из фикстур треугольника
-local ALIKE = { ["triangle_strokes.square"] = "square" }
-
 -- таблица знаков — одна: у каждого знака списка есть шаблоны и команда, лишних нет ни там, ни там
 function T.test_shapes_cover_list()
   local listed = {}
@@ -103,8 +100,8 @@ function T.test_cross_only_not_down()
   t.ok(why.down and why.down > 1, "крест дальше порога от ↓: " .. tostring(why.down))
 end
 
--- чужие рисунки (фикстуры треугольника, розы, живые розы владельца, буквы и слова) — не знак; квадрат одним штрихом
--- из фикстур треугольника — знак «квадрат»
+-- чужие рисунки (фикстуры треугольника, розы, живые розы владельца, буквы и слова) — не знак; рисунки из ALIKE модуля
+-- фикстур (квадрат одним штрихом у треугольника) — свой знак
 function T.test_fixtures_not_signs()
   local sets = { triangle_strokes = TR, rose_strokes = R, rose_owner = O }
   local n = 0
@@ -113,7 +110,7 @@ function T.test_fixtures_not_signs()
       n = n + 1
       local key = set .. "." .. name
       local got, score = signs.detect(d)
-      t.eq(got, ALIKE[key] or false, string.format("%s (score=%.2f)", key, score))
+      t.eq(got, (mod.ALIKE or {})[name] or false, string.format("%s (score=%.2f)", key, score))
     end
   end
   t.ok(n > 80, "фикстур в матрице: " .. n)

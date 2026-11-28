@@ -167,4 +167,8 @@ F.NON_TRIANGLES = { "square", "pentagon", "trapezoid", "v_open", "lambda_open", 
                     "triangle_120",
                     "circle", "eight", "bulged_side", "needle_45", "sliver_45", "zigzag" }
 
+-- рисунки, которые сами — знак управления (riddle.signs), а не чужая фигура: квадрат одним штрихом. Читают матрица
+-- коллизий (tests/signs_spec.lua) и отчёт tools/sign_matrix.lua
+F.ALIKE = { square = "square" }
+
 return F

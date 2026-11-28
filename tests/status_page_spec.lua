@@ -1206,8 +1206,13 @@ function T.test_device_sources_wifi_and_night()
   local night = false
   G_reader_settings = { isTrue = function(_, key) return key == "night_mode" and night end }
   local ok, err = pcall(function()
-    local dev = Diary.controlSources(diary())
+    local d = diary()
+    local dev = Diary.controlSources(d)
     t.eq(dev.light, nil, "подсветки нет — источника нет")
+    dev.refresh()
+    t.eq(d.pushes[#d.pushes], "full", "квадрат — полное обновление")
+    local r = d.push_rects[#d.push_rects]
+    t.eq(r.x .. "," .. r.y .. "," .. r.w .. "," .. r.h, "0,0,758,1024", "весь экран")
     for state, want in pairs({ up = true, down = true, off = false }) do
       net.state = function() return state end
       t.eq(dev.wifi.get(), want, "net.state " .. state)
@@ -1221,7 +1226,6 @@ function T.test_device_sources_wifi_and_night()
     t.eq(dev.night.get(), true)
     dev.night.toggle()
     t.eq(events[1], "ToggleNightMode")
-    t.eq(type(dev.refresh), "function")
   end)
   net.state, package.loaded["ui/network/manager"], package.loaded["ui/event"], G_reader_settings =
     saved[1], saved[2], saved[3], saved[4]
